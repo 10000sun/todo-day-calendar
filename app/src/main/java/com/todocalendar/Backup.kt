@@ -19,7 +19,22 @@ object Backup {
     private fun prefs(c: Context) = c.getSharedPreferences(PREF, Context.MODE_PRIVATE)
 
     fun target(c: Context): Uri? = prefs(c).getString(KEY, null)?.let(Uri::parse)
-    fun setTarget(c: Context, uri: Uri) = prefs(c).edit().putString(KEY, uri.toString()).apply()
+    fun setTarget(c: Context, uri: Uri) = prefs(c).edit().putString(KEY, uri.toString()).putBoolean("ok", true).apply()
+
+    /** 백업 파일이 지정돼 있고, 쓰기 권한이 남아 있고, 마지막 저장이 성공했을 때만 true */
+    fun isActive(c: Context): Boolean {
+        val u = target(c) ?: return false
+        val granted = c.contentResolver.persistedUriPermissions.any { it.uri == u && it.isWritePermission }
+        return granted && prefs(c).getBoolean("ok", true)
+    }
+
+    /** 파일에 이미 들어 있는 백업의 항목 수. 비었거나 백업 파일이 아니면 null */
+    suspend fun peek(ctx: Context, uri: Uri): Int? = withContext(Dispatchers.IO) {
+        try {
+            ctx.contentResolver.openInputStream(uri)?.bufferedReader()?.use { it.readText() }
+                ?.takeIf { it.isNotBlank() }?.let { fromJson(it).size }
+        } catch (e: Exception) { null }
+    }
 
     fun toJson(list: List<Entry>): String {
         val arr = JSONArray()
@@ -58,7 +73,10 @@ object Backup {
     }
 
     /** 자동 백업이 켜져 있으면 갱신 (실패해도 앱 동작에는 영향 없음) */
-    suspend fun autoWrite(ctx: Context) { target(ctx)?.let { write(ctx, it) } }
+    suspend fun autoWrite(ctx: Context) {
+        val u = target(ctx) ?: return
+        prefs(ctx).edit().putBoolean("ok", write(ctx, u)).apply()
+    }
 
     /** 백업 파일 내용으로 현재 데이터를 모두 교체. 복원한 항목 수, 실패하면 null */
     suspend fun restore(ctx: Context, uri: Uri): Int? = withContext(Dispatchers.IO) {
