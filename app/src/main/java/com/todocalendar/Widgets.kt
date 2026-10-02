@@ -69,7 +69,8 @@ class SelectDayReceiver : BroadcastReceiver() {
             try {
                 c.getSharedPreferences(MONTH_PREF, Context.MODE_PRIVATE).edit()
                     .putLong("sel", day).putLong("selOn", LocalDate.now().toEpochDay()).apply()
-                Refresh.updateMonthWidget(c.applicationContext)
+                // 다른 갱신(잠금)을 기다리지 않고 바로 그린다: 날짜를 누르면 즉시 바뀌어야 한다
+                Widgets.updateMonth(c.applicationContext)
             } finally { p.finish() }
         }
     }
