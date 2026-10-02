@@ -6,7 +6,6 @@ import android.net.Uri
 import android.widget.RemoteViews
 import android.util.Log
 import androidx.core.app.NotificationCompat
-import androidx.glance.appwidget.updateAll
 import androidx.work.*
 import kotlinx.coroutines.*
 import kotlinx.coroutines.sync.Mutex
@@ -25,20 +24,16 @@ object Refresh {
     fun launch(block: suspend () -> Unit) { scope.launch { block() } }
 
     /** 위젯 한 개 갱신이 오래 걸려도(최대 10초) 다른 작업이 영원히 막히지 않도록 */
-    private const val WIDGET_TIMEOUT = 4_000L
+    private const val WIDGET_TIMEOUT = 8_000L
     /** 위젯 갱신끼리는 한 번에 하나씩 */
     private val widgetLock = Mutex()
 
     suspend fun updateMonthWidget(ctx: Context) = widgetLock.withLock {
-        step { withTimeoutOrNull(WIDGET_TIMEOUT) { MonthWidget().updateAll(ctx) } }
+        step { withTimeoutOrNull(WIDGET_TIMEOUT) { Widgets.updateMonth(ctx) } }
     }
 
-    /** 두 위젯은 동시에 갱신 (각각 최대 WIDGET_TIMEOUT, 합쳐서도 그 이상 걸리지 않음 — 수신기 시간 제한 안에 끝나도록) */
     private suspend fun updateWidgets(ctx: Context) = widgetLock.withLock {
-        coroutineScope {
-            launch { step { withTimeoutOrNull(WIDGET_TIMEOUT) { TodayWidget().updateAll(ctx) } } }
-            launch { step { withTimeoutOrNull(WIDGET_TIMEOUT) { MonthWidget().updateAll(ctx) } } }
-        }
+        step { withTimeoutOrNull(WIDGET_TIMEOUT) { Widgets.updateAll(ctx) } }
     }
 
     /**

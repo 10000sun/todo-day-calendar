@@ -271,7 +271,7 @@ fun CalendarScreen(onOpenBackup: () -> Unit) {
                             Text(e.title, textDecoration = if (done) TextDecoration.LineThrough else null)
                             val sub = listOfNotNull(
                                 e.timeText().ifEmpty { null }, if (e.remind) "알림" else null,
-                                if (e.repeat != Repeat.NONE) e.repeat.label else null, if (e.dday) "D-day" else null
+                                if (e.repeat != Repeat.NONE) e.repeat.label else null, if (e.dday) ddayTag(sel - today.toEpochDay()) else null
                             ).joinToString(" · ")
                             if (sub.isNotEmpty()) Text(sub, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.outline)
                         }

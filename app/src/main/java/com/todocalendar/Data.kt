@@ -137,11 +137,16 @@ fun dayOrder(day: Long) = compareByDescending<Entry> { it.isEvent }
 
 suspend fun EntryDao.onDay(day: Long) = candidates(day).filter { it.occursOn(day) }.sortedWith(dayOrder(day))
 
+/** 남은 일수 -> "D-Day"(오늘) / "D-3"(3일 남음) / "D+2"(2일 지남) */
+fun ddayTag(daysLeft: Long): String = when {
+    daysLeft == 0L -> "D-Day"
+    daysLeft > 0 -> "D-$daysLeft"
+    else -> "D+${-daysLeft}"
+}
+
 fun ddayLabel(e: Entry, today: LocalDate = LocalDate.now()): String {
     val t = today.toEpochDay()
-    val d = (e.nextOn(t) ?: e.date) - t
-    val tag = when { d == 0L -> "D-Day"; d > 0 -> "D-$d"; else -> "D+${-d}" }
-    return "$tag ${e.title}"
+    return ddayTag((e.nextOn(t) ?: e.date) - t) + " " + e.title
 }
 
 fun line(e: Entry, day: Long) =
