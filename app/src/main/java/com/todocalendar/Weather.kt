@@ -7,6 +7,9 @@ import android.content.pm.PackageManager
 import android.location.Location
 import android.location.LocationManager
 import android.os.Build
+import android.os.Bundle
+import android.os.Looper
+import android.location.LocationListener
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
@@ -24,7 +27,9 @@ object Weather {
     private fun prefs(c: Context) = c.getSharedPreferences("weather", Context.MODE_PRIVATE)
 
     private fun save(c: Context, l: Location) {
-        prefs(c).edit().putString("lat", l.latitude.toString()).putString("lon", l.longitude.toString()).apply()
+        // 위치가 갱신되면 기온도 다음 갱신 때 새로 받도록 캐시 시각을 지운다
+        prefs(c).edit().putString("lat", l.latitude.toString()).putString("lon", l.longitude.toString())
+            .remove("at").remove("tried").apply()
     }
 
     /** 앱이 화면에 있을 때 호출: 현재(마지막) 위치를 저장하고 끝나면 then 실행 */
@@ -36,36 +41,63 @@ object Weather {
             .mapNotNull { runCatching { lm.getLastKnownLocation(it) }.getOrNull() }
             .maxByOrNull { it.time }
         if (last != null) { save(ctx, last); then(); return }
-        if (Build.VERSION.SDK_INT >= 30 && lm.isProviderEnabled(LocationManager.NETWORK_PROVIDER)) {
+        if (!lm.isProviderEnabled(LocationManager.NETWORK_PROVIDER)) return
+        if (Build.VERSION.SDK_INT >= 30) {
             lm.getCurrentLocation(LocationManager.NETWORK_PROVIDER, null, ctx.mainExecutor) { l ->
                 if (l != null) { save(ctx, l); then() }
             }
+        } else {
+            @Suppress("DEPRECATION")
+            lm.requestSingleUpdate(LocationManager.NETWORK_PROVIDER, object : LocationListener {
+                override fun onLocationChanged(l: Location) { save(ctx, l); then() }
+                override fun onStatusChanged(provider: String?, status: Int, extras: Bundle?) {}
+                override fun onProviderEnabled(provider: String) {}
+                override fun onProviderDisabled(provider: String) {}
+            }, Looper.getMainLooper())
         }
     }
 
-    /** "18°C" 형태. 위치가 없거나 조회 실패(캐시도 없음)면 null */
+    fun hasLocationPermission(ctx: Context) =
+        ctx.checkSelfPermission(Manifest.permission.ACCESS_COARSE_LOCATION) == PackageManager.PERMISSION_GRANTED
+
+    /**
+     * "18°C" 형태. 저장된 위치가 없으면 IP 기반 대략적 위치로 대신 조회한다.
+     * 네트워크 실패 시 이전 캐시, 그것도 없으면 null
+     */
     suspend fun tempText(ctx: Context): String? = withContext(Dispatchers.IO) {
         val p = prefs(ctx)
-        val lat = p.getString("lat", null) ?: return@withContext null
-        val lon = p.getString("lon", null) ?: return@withContext null
         val now = System.currentTimeMillis()
         val cached = if (p.contains("temp")) p.getFloat("temp", 0f) else null
         if (cached != null && now - p.getLong("at", 0) < FRESH) return@withContext fmt(cached)
         if (now - p.getLong("tried", 0) < RETRY) return@withContext cached?.let(::fmt)
         p.edit().putLong("tried", now).apply()
         try {
-            val conn = URL("https://api.open-meteo.com/v1/forecast?latitude=$lat&longitude=$lon&current=temperature_2m")
-                .openConnection() as HttpURLConnection
-            conn.connectTimeout = 5000
-            conn.readTimeout = 5000
-            val t = try {
-                JSONObject(conn.inputStream.bufferedReader().readText()).getJSONObject("current").getDouble("temperature_2m")
-            } finally { conn.disconnect() }
-            p.edit().putFloat("temp", t.toFloat()).putLong("at", now).apply()
-            fmt(t.toFloat())
+            var lat = p.getString("lat", null)
+            var lon = p.getString("lon", null)
+            if (lat == null || lon == null) {
+                lat = p.getString("iplat", null)
+                lon = p.getString("iplon", null)
+                if (lat == null || lon == null) {
+                    val j = getJson("https://ipwho.is/")
+                    lat = j.getDouble("latitude").toString()
+                    lon = j.getDouble("longitude").toString()
+                    p.edit().putString("iplat", lat).putString("iplon", lon).apply()
+                }
+            }
+            val t = getJson("https://api.open-meteo.com/v1/forecast?latitude=$lat&longitude=$lon&current=temperature_2m")
+                .getJSONObject("current").getDouble("temperature_2m").toFloat()
+            p.edit().putFloat("temp", t).putLong("at", now).apply()
+            fmt(t)
         } catch (e: Exception) {
             cached?.let(::fmt)
         }
+    }
+
+    private fun getJson(url: String): JSONObject {
+        val conn = URL(url).openConnection() as HttpURLConnection
+        conn.connectTimeout = 5000
+        conn.readTimeout = 5000
+        try { return JSONObject(conn.inputStream.bufferedReader().readText()) } finally { conn.disconnect() }
     }
 
     private fun fmt(t: Float) = "${Math.round(t)}°C"

@@ -56,7 +56,8 @@ object LockNotifier {
         // 완료한 할 일은 알림에서 사라진다
         val items = dao.onDay(day).filter { it.isEvent || !it.isDone(day) }
         val dd = upcomingDates(dao.ddayList(), t).take(MAX_DDAY)
-        val title = "${t.monthValue}/${t.dayOfMonth}" + (Weather.tempText(ctx)?.let { " - $it" } ?: "")
+        val temp = Weather.tempText(ctx) ?: if (Weather.hasLocationPermission(ctx)) "기온 확인 불가" else "위치 권한 필요"
+        val title = "${t.monthValue}/${t.dayOfMonth} - $temp"
 
         val big = RemoteViews(ctx.packageName, R.layout.notif_big)
         big.setTextViewText(R.id.title, title)
@@ -87,6 +88,7 @@ object LockNotifier {
             .setStyle(NotificationCompat.DecoratedCustomViewStyle())
             .setCustomBigContentView(big)
             .setOngoing(true)
+            .setShowWhen(false)
             .setOnlyAlertOnce(true)
             .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
             .setContentIntent(open)
