@@ -100,5 +100,9 @@ object Weather {
         try { return JSONObject(conn.inputStream.bufferedReader().readText()) } finally { conn.disconnect() }
     }
 
+    /** 제목용: 기온, 못 가져오면 이유 */
+    suspend fun label(ctx: Context): String =
+        tempText(ctx) ?: if (hasLocationPermission(ctx)) "기온 확인 불가" else "위치 권한 필요"
+
     private fun fmt(t: Float) = "${Math.round(t)}°C"
 }

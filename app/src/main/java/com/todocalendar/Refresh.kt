@@ -50,14 +50,12 @@ object LockNotifier {
                 setShowBadge(false)
             }
         )
-        val dao = Db.get(ctx).dao()
-        val t = LocalDate.now()
-        val day = t.toEpochDay()
-        // 완료한 할 일은 알림에서 사라진다
-        val items = dao.onDay(day).filter { it.isEvent || !it.isDone(day) }
-        val dd = upcomingDates(dao.ddayList(), t).take(MAX_DDAY)
-        val temp = Weather.tempText(ctx) ?: if (Weather.hasLocationPermission(ctx)) "기온 확인 불가" else "위치 권한 필요"
-        val title = "${t.monthValue}/${t.dayOfMonth} - $temp"
+        val sum = Summary.load(ctx)
+        val t = sum.today
+        val day = sum.day
+        val items = sum.items
+        val dd = sum.dd.take(MAX_DDAY)
+        val title = sum.title
 
         val big = RemoteViews(ctx.packageName, R.layout.notif_big)
         big.setTextViewText(R.id.title, title)
