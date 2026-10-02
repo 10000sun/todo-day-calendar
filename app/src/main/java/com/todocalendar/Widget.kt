@@ -39,10 +39,13 @@ import java.util.Locale
 /** 홈 화면 위젯: 오늘 날짜 + D-day + 오늘 할 일 */
 class TodayWidget : GlanceAppWidget() {
     override suspend fun provideGlance(context: Context, id: GlanceId) {
-        val dao = Db.get(context).dao()
         val today = LocalDate.now()
-        val items = dao.onDay(today.toEpochDay())
-        val dd = upcoming(dao.ddayList(), today).take(2)
+        val (dd, items) = try {
+            val dao = Db.get(context).dao()
+            upcoming(dao.ddayList(), today).take(2) to dao.onDay(today.toEpochDay())
+        } catch (e: Exception) {
+            emptyList<Entry>() to emptyList()
+        }
         provideContent { Body(today, dd, items) }
     }
 }
@@ -75,13 +78,20 @@ class TodayWidgetReceiver : GlanceAppWidgetReceiver() {
 /** 홈 화면 월간 달력 위젯 (바탕화면 달력 느낌) */
 class MonthWidget : GlanceAppWidget() {
     override suspend fun provideGlance(context: Context, id: GlanceId) {
-        val dao = Db.get(context).dao()
         val today = LocalDate.now()
         val ym = YearMonth.from(today)
-        val entries = dao.visibleNow(ym.atDay(1).toEpochDay(), ym.atEndOfMonth().toEpochDay())
-        val marked = (1..ym.lengthOfMonth()).filter { d -> entries.any { it.occursOn(ym.atDay(d).toEpochDay()) } }.toSet()
-        val items = dao.onDay(today.toEpochDay())
-        val dd = upcoming(dao.ddayList(), today).take(1)
+        var marked = emptySet<Int>()
+        var items = emptyList<Entry>()
+        var dd = emptyList<Entry>()
+        try {
+            val dao = Db.get(context).dao()
+            val entries = dao.visibleNow(ym.atDay(1).toEpochDay(), ym.atEndOfMonth().toEpochDay())
+            marked = (1..ym.lengthOfMonth()).filter { d -> entries.any { it.occursOn(ym.atDay(d).toEpochDay()) } }.toSet()
+            items = dao.onDay(today.toEpochDay())
+            dd = upcoming(dao.ddayList(), today).take(1)
+        } catch (e: Exception) {
+            // 데이터를 못 읽어도 달력 틀은 보여준다
+        }
         provideContent { MonthBody(ym, today, marked, dd, items) }
     }
 }
@@ -134,9 +144,9 @@ private fun MonthBody(ym: YearMonth, today: LocalDate, marked: Set<Int>, dd: Lis
 
 @Composable
 private fun RowScope.Cell(text: String, color: Color, bg: Color? = null, bold: Boolean = false) {
-    Box(GlanceModifier.defaultWeight().height(22.dp), contentAlignment = Alignment.Center) {
-        val m = GlanceModifier.size(20.dp)
-        Box(if (bg != null) m.background(ColorProvider(bg)).cornerRadius(10.dp) else m, contentAlignment = Alignment.Center) {
+    Box(GlanceModifier.defaultWeight().height(20.dp), contentAlignment = Alignment.Center) {
+        val m = GlanceModifier.size(18.dp)
+        Box(if (bg != null) m.background(ColorProvider(bg)).cornerRadius(9.dp) else m, contentAlignment = Alignment.Center) {
             Text(
                 text,
                 style = TextStyle(color = ColorProvider(color), fontSize = 11.sp, fontWeight = if (bold) FontWeight.Bold else FontWeight.Normal)
