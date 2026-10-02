@@ -4,18 +4,18 @@ import android.content.Context
 import android.content.Intent
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.glance.GlanceId
 import androidx.glance.GlanceModifier
 import androidx.glance.LocalContext
+import androidx.glance.action.Action
 import androidx.glance.action.ActionParameters
 import androidx.glance.action.actionParametersOf
 import androidx.glance.action.clickable
 import androidx.glance.appwidget.action.ActionCallback
 import androidx.glance.appwidget.action.actionRunCallback
-import androidx.glance.appwidget.lazy.LazyColumn
-import androidx.glance.appwidget.lazy.items
 import androidx.glance.appwidget.GlanceAppWidget
 import androidx.glance.appwidget.GlanceAppWidgetReceiver
 import androidx.glance.appwidget.action.actionStartActivity
@@ -66,38 +66,52 @@ class TodayWidget : GlanceAppWidget() {
     }
 }
 
+/** 한 줄: 체크 표시(mark)만 누르면 완료(toggle), 나머지 영역은 앱 열기(open). toggle이 null이면 표시만 */
+@Composable
+private fun EntryRow(mark: String, text: String, color: ColorProvider, size: TextUnit, toggle: Action?, open: Action) {
+    Row(GlanceModifier.fillMaxWidth().clickable(open), verticalAlignment = Alignment.CenterVertically) {
+        if (mark.isNotEmpty()) {
+            val m = GlanceModifier.padding(end = 10.dp, top = 4.dp, bottom = 4.dp)
+            Text(mark, if (toggle != null) m.clickable(toggle) else m, style = TextStyle(color = color, fontSize = (size.value + 3).sp))
+        }
+        Text(text, GlanceModifier.defaultWeight().padding(vertical = 4.dp), style = TextStyle(color = color, fontSize = size))
+    }
+}
+
+private fun body(e: Entry) = (if (e.timeMin >= 0) e.timeText() + " " else "") + e.title
+
 @Composable
 private fun Body(s: Summary) {
     val white = ColorProvider(Color.White)
     val orange = ColorProvider(Color(0xFFFFB74D))
-    val openApp = actionStartActivity(Intent(LocalContext.current, MainActivity::class.java))
+    val open = actionStartActivity(Intent(LocalContext.current, MainActivity::class.java))
     val headStyle = TextStyle(color = white, fontSize = 13.sp, fontWeight = FontWeight.Bold)
-    val body = TextStyle(color = white, fontSize = 13.sp)
-    val row = GlanceModifier.fillMaxWidth().padding(vertical = 3.dp)
+    val todos = s.items.take(MAX_TODO)
+    val dds = s.dd.take(MAX_DDAY)
+    // 스크롤 목록(LazyColumn)은 바깥 터치를 막아 앱이 안 열리므로, 일반 Column + 개수 제한 + "외 N개"로 처리
     Column(
         GlanceModifier.fillMaxSize()
             .background(ColorProvider(Color(0xE61E1E2E)))
             .cornerRadius(16.dp)
             .padding(12.dp)
-            .clickable(openApp)
+            .clickable(open)
     ) {
-        Text(s.title, style = TextStyle(color = white, fontSize = 16.sp, fontWeight = FontWeight.Bold))
-        LazyColumn(GlanceModifier.fillMaxSize()) {
-            item { Text(if (s.items.isEmpty()) "할 일 없음" else "할 일", GlanceModifier.padding(top = 6.dp), style = headStyle) }
-            items(s.items) { e ->
-                Text(line(e, s.day), if (e.isEvent) row else row.clickable(toggle(e, s.day)), style = body)
-            }
-            item { Text(if (s.dd.isEmpty()) "D-day 없음" else "D-day", GlanceModifier.padding(top = 6.dp), style = headStyle) }
-            items(s.dd) { (e, d) ->
-                Text(
-                    (if (e.isEvent) "" else "☐ ") + ddayLabel(e, s.today),
-                    if (e.isEvent) row else row.clickable(toggle(e, d)),
-                    style = TextStyle(color = orange, fontSize = 13.sp)
-                )
-            }
+        Text(s.title, GlanceModifier.fillMaxWidth(), style = TextStyle(color = white, fontSize = 16.sp, fontWeight = FontWeight.Bold))
+        Text(if (s.items.isEmpty()) "할 일 없음" else "할 일", GlanceModifier.fillMaxWidth().padding(top = 6.dp), style = headStyle)
+        todos.forEach { e ->
+            EntryRow(if (e.isEvent) "◆" else "☐", body(e), white, 13.sp, if (e.isEvent) null else toggle(e, s.day), open)
         }
+        if (s.items.size > MAX_TODO) Text("… 외 ${s.items.size - MAX_TODO}개", style = TextStyle(color = white, fontSize = 12.sp))
+        Text(if (s.dd.isEmpty()) "D-day 없음" else "D-day", GlanceModifier.fillMaxWidth().padding(top = 6.dp), style = headStyle)
+        dds.forEach { (e, d) ->
+            EntryRow(if (e.isEvent) "" else "☐", ddayLabel(e, s.today), orange, 13.sp, if (e.isEvent) null else toggle(e, d), open)
+        }
+        if (s.dd.size > MAX_DDAY) Text("… 외 ${s.dd.size - MAX_DDAY}개", style = TextStyle(color = orange, fontSize = 12.sp))
     }
 }
+
+private const val MAX_TODO = 5
+private const val MAX_DDAY = 3
 
 class TodayWidgetReceiver : GlanceAppWidgetReceiver() {
     override val glanceAppWidget = TodayWidget()
@@ -170,8 +184,7 @@ private fun MonthBody(ym: YearMonth, today: LocalDate, marked: Set<Int>, dd: Lis
         }
         dd.forEach { Text(ddayLabel(it, today), style = TextStyle(color = ColorProvider(Color(0xFFFFB74D)), fontSize = 12.sp)) }
         items.take(2).forEach {
-            val m = if (it.isEvent) GlanceModifier else GlanceModifier.clickable(toggle(it, today.toEpochDay()))
-            Text(line(it, today.toEpochDay()), m, style = TextStyle(color = ColorProvider(white), fontSize = 12.sp))
+            EntryRow(if (it.isEvent) "◆" else "☐", body(it), ColorProvider(white), 12.sp, if (it.isEvent) null else toggle(it, today.toEpochDay()), openApp)
         }
     }
 }
