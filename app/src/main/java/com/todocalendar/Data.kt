@@ -147,11 +147,21 @@ fun ddayLabel(e: Entry, today: LocalDate = LocalDate.now()): String {
 fun line(e: Entry, day: Long) =
     (if (e.isEvent) "◆ " else if (e.isDone(day)) "☑ " else "☐ ") + (if (e.timeMin >= 0) e.timeText() + " " else "") + e.title
 
-/** 앞으로 다가오는(또는 오늘) D-day와 그 날짜, 가까운 순. 완료한 할 일은 제외 (일정은 항상 표시) */
+/**
+ * 표시할 D-day와 그 날짜. 날짜 순(지난 것이 먼저, 그다음 가까운 순).
+ * - 오늘 이후(포함)의 D-day: 일정은 항상, 할 일은 완료하지 않은 것만
+ * - 지난 D-day: 아직 완료하지 않은 할 일만 D+N 으로 계속 표시 (일정은 지나면 사라짐)
+ */
 fun upcomingDates(all: List<Entry>, today: LocalDate = LocalDate.now()): List<Pair<Entry, Long>> {
     val t = today.toEpochDay()
-    return all.mapNotNull { e -> e.nextOn(t)?.takeUnless { !e.isEvent && e.isDone(it) }?.let { e to it } }
-        .sortedBy { it.second }
+    return all.mapNotNull { e ->
+        val next = e.nextOn(t)
+        when {
+            next != null -> if (!e.isEvent && e.isDone(next)) null else e to next
+            !e.isEvent && !e.isDone(e.date) -> e to e.date   // 지났는데 안 끝낸 할 일
+            else -> null
+        }
+    }.sortedBy { it.second }
 }
 
 fun upcoming(all: List<Entry>, today: LocalDate = LocalDate.now()): List<Entry> = upcomingDates(all, today).map { it.first }
