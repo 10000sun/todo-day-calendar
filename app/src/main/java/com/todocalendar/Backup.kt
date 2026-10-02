@@ -1,47 +1,55 @@
 package com.todocalendar
 
+import android.Manifest
 import android.content.Context
+import android.content.pm.PackageManager
 import android.net.Uri
+import android.os.Build
+import android.os.Environment
 import androidx.room.withTransaction
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
+import java.io.File
 
 /**
- * 앱을 지웠다 다시 깔아도 데이터를 살릴 수 있도록 JSON 파일로 백업/복원.
- * 사용자가 고른 파일(SAF)에 데이터가 바뀔 때마다 자동으로 덮어쓴다. 파일은 앱 삭제 후에도 남는다.
+ * 데이터를 바꿀 때마다 기기의 고정 위치(Documents/TodoDayCalendar)에 JSON으로 자동 백업한다.
+ * 사용자가 폴더를 고르지 않으며, 앱을 지우고 다시 설치해도 이 파일은 남는다.
+ * (안드로이드는 앱 삭제 후 재설치하면 앱이 만든 공유 저장소 파일을 읽을 수 없게 하므로
+ *  '모든 파일 접근' 권한을 한 번 허용해야 한다. 재설치 후에도 다시 한 번 허용하면 자동 복원된다.)
  */
 object Backup {
     private const val PREF = "backup"
-    private const val KEY = "uri"
-    /** 자동 백업/지정/복원 후 재저장이 같은 파일을 동시에 "wt"로 열어 내용이 뒤섞이지 않도록 */
+    /** 백업이 아닌 내용이 들어 있거나 읽을 수 없는 파일 */
+    const val NOT_BACKUP = -1
+    const val PATH_TEXT = "Documents/TodoDayCalendar/todo-day-calendar-backup.json"
     private val writeLock = Mutex()
 
     private fun prefs(c: Context) = c.getSharedPreferences(PREF, Context.MODE_PRIVATE)
 
-    fun target(c: Context): Uri? = prefs(c).getString(KEY, null)?.let(Uri::parse)
-    fun setTarget(c: Context, uri: Uri) = prefs(c).edit().putString(KEY, uri.toString()).putBoolean("ok", true).apply()
+    @Suppress("DEPRECATION")
+    fun file(): File = File(
+        File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOCUMENTS), "TodoDayCalendar"),
+        "todo-day-calendar-backup.json"
+    )
 
-    /** 백업 파일이 지정돼 있고, 쓰기 권한이 남아 있고, 마지막 저장이 성공했을 때만 true */
-    fun isActive(c: Context): Boolean {
-        val u = target(c) ?: return false
-        val granted = c.contentResolver.persistedUriPermissions.any { it.uri == u && it.isWritePermission }
-        return granted && prefs(c).getBoolean("ok", true)
-    }
+    /** 고정 위치에 쓸 수 있는 권한(Android 11+: 모든 파일 접근, 10 이하: 저장소 쓰기) */
+    fun hasAccess(c: Context): Boolean =
+        if (Build.VERSION.SDK_INT >= 30) Environment.isExternalStorageManager()
+        else c.checkSelfPermission(Manifest.permission.WRITE_EXTERNAL_STORAGE) == PackageManager.PERMISSION_GRANTED
 
-    /** 백업이 아닌 내용이 들어 있는 파일 */
-    const val NOT_BACKUP = -1
+    // 이 설치에서 "기존 백업을 복원할지/덮어쓸지" 정리가 끝났는지. 앱을 지우면 초기화되어 재설치 후 다시 판단한다
+    fun resolved(c: Context) = prefs(c).getBoolean("resolved", false)
+    fun setResolved(c: Context) = prefs(c).edit().putBoolean("resolved", true).apply()
+    fun prompted(c: Context) = prefs(c).getBoolean("prompted", false)
+    fun setPrompted(c: Context) = prefs(c).edit().putBoolean("prompted", true).apply()
 
-    /** 파일에 이미 들어 있는 백업의 항목 수. 빈 파일이면 null, 백업이 아닌 내용이면 NOT_BACKUP */
-    suspend fun peek(ctx: Context, uri: Uri): Int? = withContext(Dispatchers.IO) {
-        try {
-            ctx.contentResolver.openInputStream(uri)?.bufferedReader()?.use { it.readText() }
-                ?.takeIf { it.isNotBlank() }?.let { runCatching { fromJson(it).size }.getOrDefault(NOT_BACKUP) }
-        } catch (e: Exception) { null }
-    }
+    /** 권한이 있고, 첫 연결이 끝났고, 마지막 저장이 성공했을 때만 true */
+    fun isActive(c: Context): Boolean = hasAccess(c) && resolved(c) && prefs(c).getBoolean("ok", true)
 
     fun toJson(list: List<Entry>): String {
         val arr = JSONArray()
@@ -72,30 +80,48 @@ object Backup {
         }
     }
 
-    /** 지정한 파일에 현재 데이터 저장 (성공 여부 반환) */
-    suspend fun write(ctx: Context, uri: Uri): Boolean = writeLock.withLock {
+    /** 현재 데이터를 고정 위치에 저장. 임시 파일에 먼저 쓰고 바꿔치기해서 중간에 끊겨도 기존 백업이 깨지지 않는다 */
+    suspend fun write(ctx: Context): Boolean = writeLock.withLock {
         withContext(Dispatchers.IO) {
-            try {
-                val text = toJson(Db.get(ctx).dao().all())
-                ctx.contentResolver.openOutputStream(uri, "wt")!!.use { it.write(text.toByteArray()) }
-                true
-            } catch (e: Exception) { false }
+            val ok = try {
+                val f = file()
+                f.parentFile?.mkdirs()
+                val tmp = File(f.parentFile, f.name + ".tmp")
+                tmp.writeText(toJson(Db.get(ctx).dao().all()))
+                tmp.renameTo(f) || (f.delete() && tmp.renameTo(f))
+            } catch (e: CancellationException) { throw e } catch (e: Exception) { false }
+            prefs(ctx).edit().putBoolean("ok", ok).apply()
+            ok
         }
     }
 
-    /** 자동 백업이 켜져 있으면 갱신 (실패해도 앱 동작에는 영향 없음) */
-    suspend fun autoWrite(ctx: Context) {
-        val u = target(ctx) ?: return
-        prefs(ctx).edit().putBoolean("ok", write(ctx, u)).apply()
+    /** 사용자가 데이터를 바꾼 뒤 호출: 권한이 있고 첫 연결이 끝난 경우에만 저장 */
+    suspend fun autoWrite(ctx: Context) { if (hasAccess(ctx) && resolved(ctx)) write(ctx) }
+
+    /** 고정 위치 백업의 항목 수. 파일이 없거나 비었으면 null, 백업이 아니거나 읽을 수 없으면 NOT_BACKUP */
+    suspend fun peek(): Int? = withContext(Dispatchers.IO) {
+        try {
+            val f = file()
+            if (!f.isFile) null
+            else f.readText().takeIf { it.isNotBlank() }?.let { runCatching { fromJson(it).size }.getOrDefault(NOT_BACKUP) }
+        } catch (e: CancellationException) { throw e } catch (e: Exception) { NOT_BACKUP }
     }
 
-    /** 백업 파일 내용으로 현재 데이터를 모두 교체. 복원한 항목 수, 실패하면 null */
+    private suspend fun replaceAll(ctx: Context, list: List<Entry>): Int {
+        val db = Db.get(ctx)
+        db.withTransaction { db.dao().clear(); db.dao().addAll(list) }
+        return list.size
+    }
+
+    /** 고정 위치 백업으로 현재 데이터를 모두 교체. 복원한 항목 수, 실패하면 null */
+    suspend fun restoreFile(ctx: Context): Int? = withContext(Dispatchers.IO) {
+        try { replaceAll(ctx, fromJson(file().readText())) } catch (e: CancellationException) { throw e } catch (e: Exception) { null }
+    }
+
+    /** 사용자가 고른 다른 파일(예: 클라우드에 따로 보관한 백업)에서 복원 */
     suspend fun restore(ctx: Context, uri: Uri): Int? = withContext(Dispatchers.IO) {
         try {
-            val list = fromJson(ctx.contentResolver.openInputStream(uri)!!.bufferedReader().use { it.readText() })
-            val db = Db.get(ctx)
-            db.withTransaction { db.dao().clear(); db.dao().addAll(list) }
-            list.size
-        } catch (e: Exception) { null }
+            replaceAll(ctx, fromJson(ctx.contentResolver.openInputStream(uri)!!.bufferedReader().use { it.readText() }))
+        } catch (e: CancellationException) { throw e } catch (e: Exception) { null }
     }
 }

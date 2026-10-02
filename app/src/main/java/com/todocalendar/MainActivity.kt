@@ -7,6 +7,7 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
+import android.provider.Settings
 import android.os.Build
 import android.os.Bundle
 import android.widget.Toast
@@ -40,31 +41,16 @@ import java.time.DayOfWeek
 import java.time.LocalDate
 import java.time.YearMonth
 
-/** 파일 선택 시 읽기/쓰기 권한을 함께 받아 두어, 복원한 파일에 자동 백업을 계속 쓸 수 있게 한다 */
-private class OpenWritable : ActivityResultContracts.OpenDocument() {
-    override fun createIntent(context: Context, input: Array<String>): Intent =
-        super.createIntent(context, input).addFlags(
-            Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION or
-                Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION
-        )
-}
-
-/** 백업 파일 지정 시에도 영구 접근 권한(재부팅 후에도 유지)을 함께 요청한다 */
-private class CreateWritable : ActivityResultContracts.CreateDocument("application/json") {
-    override fun createIntent(context: Context, input: String): Intent =
-        super.createIntent(context, input).addFlags(
-            Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION or
-                Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION
-        )
-}
-
 class MainActivity : ComponentActivity() {
-    /** 선택한 파일에 이미 백업이 있을 때 사용자에게 복원/덮어쓰기를 묻기 위한 상태 (파일, 항목 수) */
-    private var pendingExisting by mutableStateOf<Pair<Uri, Int>?>(null)
+    /** 첫 연결 때 고정 위치에 이미 백업이 있고 현재 데이터도 있을 때, 복원/덮어쓰기를 묻기 위한 상태 (백업 항목 수) */
+    private var pendingExisting by mutableStateOf<Int?>(null)
+    private var showBackup by mutableStateOf(false)
 
-    private val askPerms = registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { refreshAll() }
-    private val pickBackup = registerForActivityResult(CreateWritable()) { uri -> uri?.let { setBackupTarget(it) } }
-    private val pickRestore = registerForActivityResult(OpenWritable()) { uri -> uri?.let { restoreFrom(it) } }
+    private val askPerms = registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) {
+        refreshAll()
+        syncBackup()
+    }
+    private val pickRestore = registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri -> uri?.let { restoreFrom(it) } }
 
     /** 알림/위젯 갱신 + 현재 위치 저장 후 한 번 더 갱신(기온 반영). Activity를 붙들지 않도록 applicationContext 사용 */
     private fun refreshAll() {
@@ -75,47 +61,67 @@ class MainActivity : ComponentActivity() {
 
     private fun toast(msg: String) = runOnUiThread { Toast.makeText(this, msg, Toast.LENGTH_LONG).show() }
 
-    /** 영구 접근 권한 저장. 실패하면(재부팅 후 백업이 조용히 멈출 위치) false */
-    private fun persist(uri: Uri): Boolean = runCatching {
-        contentResolver.takePersistableUriPermission(
-            uri, Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
-        )
-    }.isSuccess
+    /** 자동 백업에 필요한 권한 설정 열기 (Android 11+: 모든 파일 접근 화면, 10 이하: 저장소 권한 요청) */
+    private fun openAccessSettings() {
+        if (Build.VERSION.SDK_INT >= 30) {
+            runCatching {
+                startActivity(Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION, Uri.parse("package:$packageName")))
+            }.onFailure { runCatching { startActivity(Intent(Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION)) } }
+        } else askPerms.launch(arrayOf(Manifest.permission.WRITE_EXTERNAL_STORAGE))
+    }
 
-    private fun setBackupTarget(uri: Uri) {
-        if (!persist(uri)) { toast("이 위치는 자동 백업에 쓸 수 없습니다. 다른 위치를 선택해 주세요"); return }
+    /**
+     * 자동 백업 연결. 권한이 없으면 안내를 한 번 띄우고, 있으면 고정 위치의 기존 백업을 확인한다:
+     * 백업 없음 -> 바로 백업 시작 / 현재 데이터 없음 -> 자동 복원 / 둘 다 있음 -> 사용자에게 선택 요청
+     */
+    private fun syncBackup() {
         val app = applicationContext
+        if (!Backup.hasAccess(app)) {
+            if (!Backup.prompted(app)) { Backup.setPrompted(app); showBackup = true }
+            return
+        }
+        if (Backup.resolved(app)) return
         Refresh.launch {
-            // 이미 백업이 들어 있는 파일이면 덮어쓰기 전에 사용자에게 먼저 묻는다
-            val n = Backup.peek(app, uri)
+            val n = Backup.peek()
+            val count = Db.get(app).dao().all().size
             when {
-                n == Backup.NOT_BACKUP -> toast("백업이 아닌 내용이 들어 있는 파일입니다. 다른 파일(또는 새 파일)을 선택해 주세요")
-                n != null && n > 0 -> runOnUiThread { pendingExisting = uri to n }
-                else -> writeTarget(uri)
+                n == Backup.NOT_BACKUP -> toast("백업 폴더의 파일을 읽을 수 없거나 형식이 달라 자동 백업을 시작하지 못했습니다 (${Backup.PATH_TEXT})")
+                n == null || n == 0 -> { Backup.setResolved(app); Backup.write(app) }
+                count == 0 -> restoreAuto()
+                else -> runOnUiThread { pendingExisting = n }
             }
         }
     }
 
-    private fun writeTarget(uri: Uri) {
+    private fun restoreAuto() {
         val app = applicationContext
         Refresh.launch {
-            if (Backup.write(app, uri)) {
-                Backup.setTarget(app, uri)
-                toast("백업 파일을 지정했습니다. 이제 데이터를 바꿀 때마다 자동으로 저장됩니다.")
-            } else toast("백업 파일에 쓰지 못했습니다")
+            val n = Backup.restoreFile(app)
+            if (n == null) { toast("백업을 복원하지 못했습니다"); return@launch }
+            Backup.setResolved(app)
+            Refresh.all(app)
+            toast("${n}개 항목을 복원했습니다")
         }
     }
 
+    private fun overwriteBackup() {
+        val app = applicationContext
+        Refresh.launch {
+            Backup.setResolved(app)
+            toast(if (Backup.write(app)) "현재 데이터로 자동 백업을 시작했습니다" else "백업 파일에 쓰지 못했습니다")
+        }
+    }
+
+    /** 사용자가 고른 다른 파일에서 복원 (복원 후 고정 위치 백업도 갱신) */
     private fun restoreFrom(uri: Uri) {
-        val persisted = persist(uri)
         val app = applicationContext
         Refresh.launch {
             val n = Backup.restore(app, uri)
             if (n == null) { toast("복원하지 못했습니다. 투두데이 캘린더 백업 파일인지 확인해 주세요"); return@launch }
-            val auto = persisted && Backup.write(app, uri)
-            if (auto) Backup.setTarget(app, uri)
+            Backup.setResolved(app)
+            Backup.autoWrite(app)
             Refresh.all(app)
-            toast("${n}개 항목을 복원했습니다" + if (auto) "" else ". 자동 백업은 '백업 파일 지정'으로 다시 켜 주세요")
+            toast("${n}개 항목을 복원했습니다")
         }
     }
 
@@ -129,23 +135,25 @@ class MainActivity : ComponentActivity() {
         setContent {
             MaterialTheme(colorScheme = if (isSystemInDarkTheme()) darkColorScheme() else lightColorScheme()) {
                 Surface(Modifier.fillMaxSize()) {
-                    CalendarScreen(
-                        onPickBackup = { pickBackup.launch("todocalendar-backup.json") },
-                        onRestore = { pickRestore.launch(arrayOf("*/*")) }
+                    CalendarScreen(onOpenBackup = { showBackup = true })
+                    if (showBackup) BackupDialog(
+                        onDismiss = { showBackup = false },
+                        onSettings = { showBackup = false; openAccessSettings() },
+                        onRestore = { showBackup = false; pickRestore.launch(arrayOf("*/*")) }
                     )
-                    pendingExisting?.let { (uri, n) ->
+                    pendingExisting?.let { n ->
                         AlertDialog(
                             onDismissRequest = { pendingExisting = null },
-                            title = { Text("이미 백업이 들어 있는 파일입니다") },
+                            title = { Text("이전에 저장된 백업이 있습니다") },
                             text = {
                                 Text(
-                                    "이 파일에는 ${n}개 항목이 저장돼 있습니다.\n\n" +
+                                    "${Backup.PATH_TEXT}에 ${n}개 항목이 저장돼 있습니다.\n\n" +
                                         "• 복원: 현재 데이터를 이 백업으로 교체합니다.\n" +
-                                        "• 덮어쓰기: 현재 데이터로 이 파일의 기존 백업을 지웁니다."
+                                        "• 덮어쓰기: 현재 데이터로 기존 백업을 지웁니다."
                                 )
                             },
-                            confirmButton = { TextButton({ pendingExisting = null; restoreFrom(uri) }) { Text("복원") } },
-                            dismissButton = { TextButton({ pendingExisting = null; writeTarget(uri) }) { Text("덮어쓰기") } }
+                            confirmButton = { TextButton({ pendingExisting = null; restoreAuto() }) { Text("복원") } },
+                            dismissButton = { TextButton({ pendingExisting = null; overwriteBackup() }) { Text("덮어쓰기") } }
                         )
                     }
                 }
@@ -156,6 +164,7 @@ class MainActivity : ComponentActivity() {
     override fun onStart() {
         super.onStart()
         refreshAll()
+        syncBackup()   // 권한 설정 화면에서 돌아왔을 때도 여기서 이어진다
     }
 }
 
@@ -163,7 +172,7 @@ private val dateSaver = Saver<LocalDate, Long>(save = { it.toEpochDay() }, resto
 private val monthSaver = Saver<YearMonth, String>(save = { it.toString() }, restore = { YearMonth.parse(it) })
 
 @Composable
-fun CalendarScreen(onPickBackup: () -> Unit, onRestore: () -> Unit) {
+fun CalendarScreen(onOpenBackup: () -> Unit) {
     val ctx = LocalContext.current
     val db = remember { Db.get(ctx) }
     val entryDao = remember { db.dao() }
@@ -172,7 +181,6 @@ fun CalendarScreen(onPickBackup: () -> Unit, onRestore: () -> Unit) {
     var month by rememberSaveable(stateSaver = monthSaver) { mutableStateOf(YearMonth.from(today)) }
     var selected by rememberSaveable(stateSaver = dateSaver) { mutableStateOf(today) }
     var adding by rememberSaveable { mutableStateOf(false) }
-    var showBackup by rememberSaveable { mutableStateOf(false) }
     var editing by remember { mutableStateOf<Entry?>(null) }
     val entries by remember(month) { entryDao.visible(month.atDay(1).toEpochDay(), month.atEndOfMonth().toEpochDay()) }
         .collectAsState(emptyList())
@@ -200,7 +208,7 @@ fun CalendarScreen(onPickBackup: () -> Unit, onRestore: () -> Unit) {
                         )
                     }
                 }
-                TextButton({ showBackup = true }) { Text("백업") }
+                TextButton(onOpenBackup) { Text("백업") }
             }
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
                 TextButton({ month = month.minusMonths(1) }) { Text("<") }
@@ -253,8 +261,6 @@ fun CalendarScreen(onPickBackup: () -> Unit, onRestore: () -> Unit) {
         }
     }
 
-    if (showBackup) BackupDialog({ showBackup = false }, { showBackup = false; onPickBackup() }, { showBackup = false; onRestore() })
-
     if (adding || editing != null) {
         val close = { adding = false; editing = null }
         EntryDialog(editing, selected, close) { e -> write { save(e) }; close() }
@@ -292,30 +298,31 @@ private fun RowScope.DayCell(d: LocalDate?, sel: Boolean, isToday: Boolean, hasE
 private fun Dot(c: Color) = Box(Modifier.padding(1.dp).size(5.dp).background(c, CircleShape))
 
 @Composable
-private fun BackupDialog(onDismiss: () -> Unit, onPick: () -> Unit, onRestore: () -> Unit) {
+private fun BackupDialog(onDismiss: () -> Unit, onSettings: () -> Unit, onRestore: () -> Unit) {
     val ctx = LocalContext.current
-    val has = Backup.target(ctx) != null
+    val access = Backup.hasAccess(ctx)
     val on = Backup.isActive(ctx)
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("백업 / 복원") },
+        title = { Text("자동 백업") },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text(
                     when {
-                        on -> "자동 백업 켜짐: 데이터를 바꿀 때마다 백업 파일에 저장됩니다."
-                        has -> "자동 백업 중단됨: 백업 파일에 쓰지 못하고 있습니다(권한을 잃었거나 저장 공간 부족). 백업 파일을 다시 지정해 주세요."
-                        else -> "자동 백업 꺼짐: 백업 파일을 지정하면 데이터를 바꿀 때마다 자동 저장됩니다."
+                        on -> "자동 백업 켜짐: 데이터를 바꿀 때마다 아래 위치에 저장됩니다."
+                        access -> "자동 백업이 아직 시작되지 않았거나 마지막 저장에 실패했습니다. 앱을 다시 열어 보세요."
+                        else -> "자동 백업 꺼짐: '모든 파일 접근'을 허용하면 앱이 알아서 아래 위치에 저장합니다. 폴더를 직접 고를 필요가 없습니다."
                     }
                 )
+                Text(Backup.PATH_TEXT, style = MaterialTheme.typography.labelMedium)
                 Text(
-                    "앱을 지우고 다시 설치했다면 '백업에서 복원'으로 저장해 둔 파일을 선택하세요. 현재 데이터는 백업 내용으로 교체됩니다.",
+                    "앱을 지우고 다시 설치해도 이 파일은 남습니다. 재설치 후 '모든 파일 접근'을 다시 허용하면 자동으로 복원됩니다.",
                     style = MaterialTheme.typography.labelMedium
                 )
             }
         },
-        confirmButton = { TextButton(onPick) { Text(if (on) "백업 파일 변경" else if (has) "백업 파일 다시 지정" else "백업 파일 지정") } },
-        dismissButton = { TextButton(onRestore) { Text("백업에서 복원") } }
+        confirmButton = { if (access) TextButton(onDismiss) { Text("닫기") } else TextButton(onSettings) { Text("권한 설정 열기") } },
+        dismissButton = { TextButton(onRestore) { Text("다른 파일에서 복원") } }
     )
 }
 
