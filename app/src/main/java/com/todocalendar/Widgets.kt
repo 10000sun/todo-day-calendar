@@ -84,7 +84,9 @@ object Widgets {
     private const val PURPLE = 0xFFB39DFF.toInt()
     private const val EVENT_DOT = 0xFFFFB74D.toInt()
     private const val TODO_DOT = 0xFF4FC3F7.toInt()
-    private const val ROW_H = 26f   // 목록 한 줄 높이(dp) 추정치
+    private const val ROW_H = 30f   // 목록 한 줄 높이(dp) 추정치 (체크 표시를 키운 만큼 반영)
+    /** 체크 표시(☐/☑/◆)를 글자보다 이만큼(sp) 더 크게 */
+    private const val MARK_EXTRA = 5f
 
     private fun mgr(ctx: Context) = AppWidgetManager.getInstance(ctx)
     private fun ids(ctx: Context, cls: Class<*>) = mgr(ctx).getAppWidgetIds(ComponentName(ctx, cls))
@@ -158,13 +160,13 @@ object Widgets {
         val r = RemoteViews(ctx.packageName, R.layout.widget_row)
         if (mark.isEmpty()) {
             // keepHeight: 표시는 숨기되 자리(높이)는 유지 -> 줄 높이가 항상 같다
-            if (keepHeight) { r.setTextViewText(R.id.w_mark, "☐"); r.setTextViewTextSize(R.id.w_mark, TypedValue.COMPLEX_UNIT_SP, sizeSp + 3); r.setViewVisibility(R.id.w_mark, View.INVISIBLE) }
+            if (keepHeight) { r.setTextViewText(R.id.w_mark, "☐"); r.setTextViewTextSize(R.id.w_mark, TypedValue.COMPLEX_UNIT_SP, sizeSp + MARK_EXTRA); r.setViewVisibility(R.id.w_mark, View.INVISIBLE) }
             else r.setViewVisibility(R.id.w_mark, View.GONE)
         }
         else {
             r.setTextViewText(R.id.w_mark, mark)
             r.setTextColor(R.id.w_mark, color)
-            r.setTextViewTextSize(R.id.w_mark, TypedValue.COMPLEX_UNIT_SP, sizeSp + 3)
+            r.setTextViewTextSize(R.id.w_mark, TypedValue.COMPLEX_UNIT_SP, sizeSp + MARK_EXTRA)
         }
         r.setTextViewText(R.id.w_text, text)
         r.setTextColor(R.id.w_text, color)

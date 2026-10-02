@@ -3,6 +3,9 @@ package com.todocalendar
 import android.app.*
 import android.content.*
 import android.net.Uri
+import android.text.Spannable
+import android.text.SpannableString
+import android.text.style.RelativeSizeSpan
 import android.widget.RemoteViews
 import android.util.Log
 import androidx.core.app.NotificationCompat
@@ -121,7 +124,10 @@ object LockNotifier {
         big.removeAllViews(R.id.rows)   // 알림 갱신도 기존 화면 위에 덧붙여질 수 있으므로 먼저 비운다
         fun add(layout: Int, text: String, click: PendingIntent? = null) {
             val v = RemoteViews(ctx.packageName, layout)
-            v.setTextViewText(R.id.t, text)
+            // 줄 맨 앞의 체크 표시(☐/☑/◆)만 크게: 누르기 쉽고 한눈에 보이도록
+            val styled = SpannableString(text)
+            if (text.isNotEmpty() && text[0] in "☐☑◆") styled.setSpan(RelativeSizeSpan(1.45f), 0, 1, Spannable.SPAN_EXCLUSIVE_EXCLUSIVE)
+            v.setTextViewText(R.id.t, styled)
             if (click != null) v.setOnClickPendingIntent(R.id.t, click)
             big.addView(R.id.rows, v)
         }
