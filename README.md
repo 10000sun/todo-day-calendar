@@ -1,4 +1,4 @@
-# 투두캘린더
+# 투두데이 캘린더
 달력 + 일별 투두 + D-day 안드로이드 앱 (Kotlin / Compose / Room / Glance). 최소 Android 8.0.
 
 ## 기능

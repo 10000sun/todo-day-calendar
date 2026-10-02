@@ -35,7 +35,7 @@ object Backup {
 
     fun fromJson(text: String): List<Entry> {
         val root = JSONObject(text)
-        require(root.optString("app") == "todocalendar") { "투두캘린더 백업 파일이 아닙니다" }
+        require(root.optString("app") == "todocalendar") { "투두데이 캘린더 백업 파일이 아닙니다" }
         val arr = root.getJSONArray("entries")
         return (0 until arr.length()).map {
             val o = arr.getJSONObject(it)

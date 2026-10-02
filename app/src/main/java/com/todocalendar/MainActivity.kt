@@ -86,7 +86,7 @@ class MainActivity : ComponentActivity() {
         val app = applicationContext
         Refresh.launch {
             val n = Backup.restore(app, uri)
-            if (n == null) { toast("복원하지 못했습니다. 투두캘린더 백업 파일인지 확인해 주세요"); return@launch }
+            if (n == null) { toast("복원하지 못했습니다. 투두데이 캘린더 백업 파일인지 확인해 주세요"); return@launch }
             if (Backup.write(app, uri)) Backup.setTarget(app, uri)
             Refresh.all(app)
             toast("${n}개 항목을 복원했습니다")

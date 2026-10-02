@@ -19,5 +19,5 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          cp app/build/outputs/apk/release/app-release.apk todocalendar-${{ github.ref_name }}.apk
-          gh release create "${{ github.ref_name }}" todocalendar-${{ github.ref_name }}.apk --title "${{ github.ref_name }}" --generate-notes
+          cp app/build/outputs/apk/release/app-release.apk todo-day-calendar-${{ github.ref_name }}.apk
+          gh release create "${{ github.ref_name }}" todo-day-calendar-${{ github.ref_name }}.apk --title "${{ github.ref_name }}" --generate-notes
