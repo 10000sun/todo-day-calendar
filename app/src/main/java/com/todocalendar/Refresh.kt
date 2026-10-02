@@ -16,7 +16,9 @@ object Refresh {
 
     suspend fun all(ctx: Context) {
         TodayWidget().updateAll(ctx)
+        MonthWidget().updateAll(ctx)
         LockNotifier.post(ctx)
+        Reminders.run(ctx)
     }
 }
 
@@ -36,19 +38,20 @@ object LockNotifier {
         )
         val dao = Db.get(ctx).dao()
         val t = LocalDate.now()
-        val items = dao.on(t.toEpochDay())
+        val day = t.toEpochDay()
+        val items = dao.onDay(day)
         val dd = upcoming(dao.ddayList(), t).take(2)
         val todos = items.filter { !it.isEvent }
         val style = NotificationCompat.InboxStyle()
-        (dd.map { ddayLabel(it, t) } + items.map(::line)).take(7).forEach { style.addLine(it) }
+        (dd.map { ddayLabel(it, t) } + items.map { line(it, day) }).take(7).forEach { style.addLine(it) }
         val open = PendingIntent.getActivity(
             ctx, 0, Intent(ctx, MainActivity::class.java),
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
         )
         val n = NotificationCompat.Builder(ctx, CH)
             .setSmallIcon(android.R.drawable.ic_menu_my_calendar)
-            .setContentTitle("${t.monthValue}/${t.dayOfMonth} · 할 일 ${todos.count { it.done }}/${todos.size}")
-            .setContentText(dd.firstOrNull()?.let { ddayLabel(it, t) } ?: items.firstOrNull()?.let(::line) ?: "오늘 일정 없음")
+            .setContentTitle("${t.monthValue}/${t.dayOfMonth} · 할 일 ${todos.count { it.isDone(day) }}/${todos.size}")
+            .setContentText(dd.firstOrNull()?.let { ddayLabel(it, t) } ?: items.firstOrNull()?.let { line(it, day) } ?: "오늘 일정 없음")
             .setStyle(style)
             .setOngoing(true)
             .setOnlyAlertOnce(true)

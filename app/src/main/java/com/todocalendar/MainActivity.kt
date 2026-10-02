@@ -1,6 +1,8 @@
 package com.todocalendar
 
 import android.Manifest
+import android.app.DatePickerDialog
+import android.app.TimePickerDialog
 import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
@@ -10,6 +12,8 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
@@ -53,7 +57,8 @@ fun CalendarScreen() {
     var month by remember { mutableStateOf(YearMonth.from(today)) }
     var selected by remember { mutableStateOf(today) }
     var adding by remember { mutableStateOf(false) }
-    val entries by remember(month) { dao.range(month.atDay(1).toEpochDay(), month.atEndOfMonth().toEpochDay()) }
+    var editing by remember { mutableStateOf<Entry?>(null) }
+    val entries by remember(month) { dao.visible(month.atDay(1).toEpochDay(), month.atEndOfMonth().toEpochDay()) }
         .collectAsState(emptyList())
     val ddays by remember { dao.ddays() }.collectAsState(emptyList())
 
@@ -63,10 +68,10 @@ fun CalendarScreen() {
         floatingActionButton = { FloatingActionButton(onClick = { adding = true }) { Text("＋") } }
     ) { pad ->
         Column(Modifier.padding(pad).padding(horizontal = 12.dp)) {
-            val upcoming = upcoming(ddays, today)
-            if (upcoming.isNotEmpty()) {
+            val soon = upcoming(ddays, today)
+            if (soon.isNotEmpty()) {
                 LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    items(upcoming, key = { it.id }) { e ->
+                    items(soon, key = { it.id }) { e ->
                         AssistChip(
                             onClick = { selected = LocalDate.ofEpochDay(e.date); month = YearMonth.from(selected) },
                             label = { Text(ddayLabel(e, today)) }
@@ -92,25 +97,29 @@ fun CalendarScreen() {
                 Row(Modifier.fillMaxWidth()) {
                     for (i in 0 until 7) {
                         val d = week.getOrNull(i)
-                        val day = d?.let { x -> entries.filter { it.date == x.toEpochDay() } }.orEmpty()
+                        val day = d?.let { x -> entries.filter { it.occursOn(x.toEpochDay()) } }.orEmpty()
                         DayCell(d, d == selected, d == today, day.any { it.isEvent }, day.any { !it.isEvent }) { d?.let { selected = it } }
                     }
                 }
             }
             HorizontalDivider(Modifier.padding(vertical = 8.dp))
             Text("${selected.monthValue}월 ${selected.dayOfMonth}일", style = MaterialTheme.typography.titleMedium)
-            val list = entries.filter { it.date == selected.toEpochDay() }
-                .sortedWith(compareByDescending<Entry> { it.isEvent }.thenBy { it.done }.thenBy { it.id })
+            val sel = selected.toEpochDay()
+            val list = entries.filter { it.occursOn(sel) }.sortedWith(dayOrder(sel))
             LazyColumn(Modifier.weight(1f)) {
                 items(list, key = { it.id }) { e ->
-                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                    val done = e.isDone(sel)
+                    Row(Modifier.fillMaxWidth().clickable { editing = e }, verticalAlignment = Alignment.CenterVertically) {
                         if (e.isEvent) Text("◆", Modifier.padding(horizontal = 12.dp), color = MaterialTheme.colorScheme.primary)
-                        else Checkbox(e.done, { c -> write { update(e.copy(done = c)) } })
-                        Text(
-                            e.title, Modifier.weight(1f),
-                            textDecoration = if (e.done) TextDecoration.LineThrough else null
-                        )
-                        if (e.dday) Text("D-day", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.tertiary)
+                        else Checkbox(done, { c -> write { update(e.withDone(sel, c)) } })
+                        Column(Modifier.weight(1f)) {
+                            Text(e.title, textDecoration = if (done) TextDecoration.LineThrough else null)
+                            val sub = listOfNotNull(
+                                e.timeText().ifEmpty { null }, if (e.remind) "알림" else null,
+                                if (e.repeat != Repeat.NONE) e.repeat.label else null, if (e.dday) "D-day" else null
+                            ).joinToString(" · ")
+                            if (sub.isNotEmpty()) Text(sub, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.outline)
+                        }
                         TextButton({ write { delete(e) } }) { Text("삭제") }
                     }
                 }
@@ -118,7 +127,10 @@ fun CalendarScreen() {
         }
     }
 
-    if (adding) AddDialog(selected, { adding = false }) { e -> write { add(e) }; adding = false }
+    if (adding || editing != null) {
+        val close = { adding = false; editing = null }
+        EntryDialog(editing, selected, close) { e -> write { if (e.id == 0L) add(e) else update(e) }; close() }
+    }
 }
 
 @Composable
@@ -152,19 +164,44 @@ private fun RowScope.DayCell(d: LocalDate?, sel: Boolean, isToday: Boolean, hasE
 private fun Dot(c: Color) = Box(Modifier.padding(1.dp).size(5.dp).background(c, CircleShape))
 
 @Composable
-private fun AddDialog(date: LocalDate, onDismiss: () -> Unit, onSave: (Entry) -> Unit) {
-    var title by remember { mutableStateOf("") }
-    var event by remember { mutableStateOf(false) }
-    var dday by remember { mutableStateOf(false) }
+private fun EntryDialog(init: Entry?, date: LocalDate, onDismiss: () -> Unit, onSave: (Entry) -> Unit) {
+    val ctx = LocalContext.current
+    var title by remember { mutableStateOf(init?.title ?: "") }
+    var event by remember { mutableStateOf(init?.isEvent ?: false) }
+    var dday by remember { mutableStateOf(init?.dday ?: false) }
+    var rep by remember { mutableStateOf(init?.repeat ?: Repeat.NONE) }
+    var timeMin by remember { mutableStateOf(init?.timeMin ?: -1) }
+    var remind by remember { mutableStateOf(init?.remind ?: false) }
+    var day by remember { mutableStateOf(init?.let { LocalDate.ofEpochDay(it.date) } ?: date) }
+    var menu by remember { mutableStateOf(false) }
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("${date.monthValue}월 ${date.dayOfMonth}일 추가") },
+        title = { Text(if (init == null) "추가" else "수정") },
         text = {
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 OutlinedTextField(title, { title = it }, singleLine = true, label = { Text("제목") })
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     FilterChip(!event, { event = false }, { Text("할 일") })
                     FilterChip(event, { event = true }, { Text("일정") })
+                }
+                TextButton({
+                    DatePickerDialog(ctx, { _, y, m, d -> day = LocalDate.of(y, m + 1, d) }, day.year, day.monthValue - 1, day.dayOfMonth).show()
+                }) { Text((if (rep == Repeat.NONE) "날짜: " else "시작일: ") + day) }
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    TextButton({
+                        val t = if (timeMin >= 0) timeMin else 9 * 60
+                        TimePickerDialog(ctx, { _, h, m -> timeMin = h * 60 + m }, t / 60, t % 60, true).show()
+                    }) { Text(if (timeMin < 0) "시간 없음" else "시간: %02d:%02d".format(timeMin / 60, timeMin % 60)) }
+                    if (timeMin >= 0) TextButton({ timeMin = -1; remind = false }) { Text("지움") }
+                }
+                if (timeMin >= 0) Row(verticalAlignment = Alignment.CenterVertically) {
+                    Checkbox(remind, { remind = it }); Text("정시에 알림")
+                }
+                Box {
+                    TextButton({ menu = true }) { Text("반복: ${rep.label}") }
+                    DropdownMenu(menu, { menu = false }) {
+                        Repeat.values().forEach { r -> DropdownMenuItem({ Text(r.label) }, { rep = r; menu = false }) }
+                    }
                 }
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Checkbox(dday, { dday = it }); Text("D-day로 표시")
@@ -173,8 +210,13 @@ private fun AddDialog(date: LocalDate, onDismiss: () -> Unit, onSave: (Entry) ->
         },
         confirmButton = {
             TextButton(enabled = title.isNotBlank(), onClick = {
-                onSave(Entry(date = date.toEpochDay(), title = title.trim(), isEvent = event, dday = dday))
-            }) { Text("추가") }
+                onSave(
+                    (init ?: Entry(date = 0, title = "")).copy(
+                        date = day.toEpochDay(), title = title.trim(), isEvent = event, dday = dday,
+                        repeat = rep, timeMin = timeMin, remind = remind && timeMin >= 0
+                    )
+                )
+            }) { Text(if (init == null) "추가" else "저장") }
         },
         dismissButton = { TextButton(onDismiss) { Text("취소") } }
     )
