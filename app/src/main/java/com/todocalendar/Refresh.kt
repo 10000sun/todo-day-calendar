@@ -24,28 +24,46 @@ object Refresh {
     /** 화면(컴포지션)이 사라져도 취소되지 않도록 앱 범위에서 실행 */
     fun launch(block: suspend () -> Unit) { scope.launch { block() } }
 
-    /** userEdit=true: 사용자가 데이터를 바꾼 경우 — 끝나면 자동 백업 파일도 갱신 */
+    /** 위젯 한 개 갱신이 오래 걸려도(최대 10초) 다른 작업이 영원히 막히지 않도록 */
+    private const val WIDGET_TIMEOUT = 10_000L
+    /** 위젯 갱신끼리는 한 번에 하나씩 */
+    private val widgetLock = Mutex()
+
+    suspend fun updateMonthWidget(ctx: Context) = widgetLock.withLock {
+        step { withTimeoutOrNull(WIDGET_TIMEOUT) { MonthWidget().updateAll(ctx) } }
+    }
+
+    private suspend fun updateWidgets(ctx: Context) = widgetLock.withLock {
+        step { withTimeoutOrNull(WIDGET_TIMEOUT) { TodayWidget().updateAll(ctx) } }
+        step { withTimeoutOrNull(WIDGET_TIMEOUT) { MonthWidget().updateAll(ctx) } }
+    }
+
+    /**
+     * userEdit=true: 사용자가 데이터를 바꾼 경우 — 끝나면 자동 백업 파일도 갱신.
+     * 알림/알람/백업과 위젯 갱신은 서로 기다리지 않고 동시에 진행한다 (한쪽이 느려도 다른 쪽이 막히지 않음).
+     */
     suspend fun all(ctx: Context, userEdit: Boolean = false) {
-        lock.withLock {
-            // 위젯/알림은 저장된 기온으로 즉시 그린다 (네트워크를 기다리지 않아 삭제·수정이 바로 반영됨)
-            step { TodayWidget().updateAll(ctx) }
-            step { MonthWidget().updateAll(ctx) }
-            step { LockNotifier.post(ctx) }
-            step { Reminders.run(ctx) }
-            if (userEdit) step { Backup.autoWrite(ctx) }
+        coroutineScope {
+            launch {
+                lock.withLock {
+                    step { Reminders.run(ctx) }
+                    step { LockNotifier.post(ctx) }
+                    if (userEdit) step { Backup.autoWrite(ctx) }
+                }
+            }
+            launch { updateWidgets(ctx) }
         }
         refreshWeather(ctx)
     }
 
-    /** 기온 조회는 잠금 밖에서 따로: 느려도 다른 갱신을 막지 않고, 새 값이 있을 때만 화면을 한 번 더 그린다 */
+    /** 기온/공휴일 조회는 따로: 느려도 다른 갱신을 막지 않고, 새 값이 있을 때만 화면을 한 번 더 그린다 */
     private fun refreshWeather(ctx: Context) {
         scope.launch {
             val w = Weather.refreshIfStale(ctx)
             val h = Holidays.refreshIfStale(ctx)
-            if (w || h) lock.withLock {
-                step { TodayWidget().updateAll(ctx) }
-                step { MonthWidget().updateAll(ctx) }
-                step { LockNotifier.post(ctx) }
+            if (w || h) coroutineScope {
+                launch { lock.withLock { step { LockNotifier.post(ctx) } } }
+                launch { updateWidgets(ctx) }
             }
         }
     }
@@ -133,7 +151,7 @@ class ToggleReceiver : BroadcastReceiver() {
         val p = goAsync()
         CoroutineScope(Dispatchers.Default).launch {
             try {
-                Db.get(c).setDone(id, day, true)
+                Db.get(c).setDone(id, day, i.getBooleanExtra("done", true))
                 Refresh.all(c, userEdit = true)
             } finally { p.finish() }
         }
