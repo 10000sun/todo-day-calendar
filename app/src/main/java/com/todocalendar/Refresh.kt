@@ -66,12 +66,10 @@ object LockNotifier {
             if (click != null) v.setOnClickPendingIntent(R.id.t, click)
             big.addView(R.id.rows, v)
         }
-        add(R.layout.notif_head, "할 일")
-        if (items.isEmpty()) add(R.layout.notif_row, "없음")
+        add(R.layout.notif_head, if (items.isEmpty()) "할 일 없음" else "할 일")
         items.take(MAX_TODO).forEach { add(R.layout.notif_row, line(it, day), if (it.isEvent) null else toggle(ctx, it, day)) }
         if (items.size > MAX_TODO) add(R.layout.notif_row, "… 외 ${items.size - MAX_TODO}개")
-        add(R.layout.notif_head, "D-day")
-        if (dd.isEmpty()) add(R.layout.notif_row, "없음")
+        add(R.layout.notif_head, if (dd.isEmpty()) "D-day 없음" else "D-day")
         // D-day로 지정한 할 일도 줄을 눌러 완료 (해당 D-day 날짜 기준)
         dd.forEach { (e, d) ->
             add(R.layout.notif_row, (if (e.isEvent) "" else "☐ ") + ddayLabel(e, t), if (e.isEvent) null else toggle(ctx, e, d))
