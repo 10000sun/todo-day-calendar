@@ -168,6 +168,23 @@ private fun RowScope.DayCell(d: LocalDate?, sel: Boolean, isToday: Boolean, hasE
 @Composable
 private fun Dot(c: Color) = Box(Modifier.padding(1.dp).size(5.dp).background(c, CircleShape))
 
+/** 선택된 쪽만 진하게 채워서 보이고, 선택 안 된 쪽은 테두리 없는 연한 배경 */
+@Composable
+private fun Choice(selected: Boolean, label: String, onClick: () -> Unit) {
+    FilterChip(
+        selected = selected,
+        onClick = onClick,
+        label = { Text(label, fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal) },
+        border = null,
+        colors = FilterChipDefaults.filterChipColors(
+            containerColor = MaterialTheme.colorScheme.surfaceVariant,
+            labelColor = MaterialTheme.colorScheme.onSurfaceVariant,
+            selectedContainerColor = MaterialTheme.colorScheme.primary,
+            selectedLabelColor = MaterialTheme.colorScheme.onPrimary,
+        )
+    )
+}
+
 @Composable
 private fun EntryDialog(init: Entry?, date: LocalDate, onDismiss: () -> Unit, onSave: (Entry) -> Unit) {
     val ctx = LocalContext.current
@@ -186,8 +203,8 @@ private fun EntryDialog(init: Entry?, date: LocalDate, onDismiss: () -> Unit, on
             Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 OutlinedTextField(title, { title = it }, singleLine = true, label = { Text("제목") })
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    FilterChip(!event, { event = false }, { Text("할 일") })
-                    FilterChip(event, { event = true }, { Text("일정") })
+                    Choice(!event, "할 일") { event = false }
+                    Choice(event, "일정") { event = true }
                 }
                 TextButton({
                     DatePickerDialog(ctx, { _, y, m, d -> day = LocalDate.of(y, m + 1, d) }, day.year, day.monthValue - 1, day.dayOfMonth).show()
