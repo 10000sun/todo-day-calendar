@@ -3,6 +3,7 @@ package com.todocalendar
 import android.Manifest
 import android.app.DatePickerDialog
 import android.app.TimePickerDialog
+import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
@@ -34,16 +35,31 @@ import java.time.LocalDate
 import java.time.YearMonth
 
 class MainActivity : ComponentActivity() {
-    private val askNotif = registerForActivityResult(ActivityResultContracts.RequestPermission()) { Refresh.fire(this) }
+    private val askPerms = registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { refreshAll() }
+
+    /** 알림/위젯 갱신 + 현재 위치 저장 후 한 번 더 갱신(기온 반영) */
+    private fun refreshAll() {
+        Refresh.fire(this)
+        Weather.captureLocation(this) { Refresh.fire(this) }
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        if (Build.VERSION.SDK_INT >= 33) askNotif.launch(Manifest.permission.POST_NOTIFICATIONS) else Refresh.fire(this)
+        val need = buildList {
+            if (Build.VERSION.SDK_INT >= 33) add(Manifest.permission.POST_NOTIFICATIONS)
+            add(Manifest.permission.ACCESS_COARSE_LOCATION)
+        }.filter { checkSelfPermission(it) != PackageManager.PERMISSION_GRANTED }
+        if (need.isNotEmpty()) askPerms.launch(need.toTypedArray())
         setContent {
             MaterialTheme(colorScheme = if (isSystemInDarkTheme()) darkColorScheme() else lightColorScheme()) {
                 Surface(Modifier.fillMaxSize()) { CalendarScreen() }
             }
         }
+    }
+
+    override fun onStart() {
+        super.onStart()
+        refreshAll()
     }
 }
 

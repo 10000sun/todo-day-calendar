@@ -2,6 +2,8 @@ package com.todocalendar
 
 import android.app.*
 import android.content.*
+import android.net.Uri
+import android.widget.RemoteViews
 import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.glance.appwidget.updateAll
@@ -22,8 +24,8 @@ object Refresh {
     suspend fun all(ctx: Context, fire: Boolean = true) {
         step { TodayWidget().updateAll(ctx) }
         step { MonthWidget().updateAll(ctx) }
-        step { LockNotifier.post(ctx) }
         step { Reminders.run(ctx, fire) }
+        step { LockNotifier.post(ctx) }
     }
 
     /** 한 단계가 실패해도 나머지(특히 알람 재예약)는 계속 진행 */
@@ -32,16 +34,18 @@ object Refresh {
     }
 }
 
-/** 잠금화면에 고정되는 오늘 할 일 알림 (VISIBILITY_PUBLIC + ongoing) */
+/** 잠금화면/알림창에 고정되는 오늘 요약 (VISIBILITY_PUBLIC + ongoing). 할 일은 줄을 눌러 바로 완료 */
 object LockNotifier {
     private const val CH = "today"
     private const val ID = 1
+    private const val MAX_TODO = 8
+    private const val MAX_DDAY = 5
 
     suspend fun post(ctx: Context) {
         val nm = ctx.getSystemService(NotificationManager::class.java)
         if (!nm.areNotificationsEnabled()) return
         nm.createNotificationChannel(
-            NotificationChannel(CH, "오늘 할 일", NotificationManager.IMPORTANCE_LOW).apply {
+            NotificationChannel(CH, "오늘 요약", NotificationManager.IMPORTANCE_LOW).apply {
                 lockscreenVisibility = Notification.VISIBILITY_PUBLIC
                 setShowBadge(false)
             }
@@ -49,26 +53,67 @@ object LockNotifier {
         val dao = Db.get(ctx).dao()
         val t = LocalDate.now()
         val day = t.toEpochDay()
-        val items = dao.onDay(day)
-        val dd = upcoming(dao.ddayList(), t).take(2)
-        val todos = items.filter { !it.isEvent }
-        val style = NotificationCompat.InboxStyle()
-        (dd.map { ddayLabel(it, t) } + items.map { line(it, day) }).take(7).forEach { style.addLine(it) }
+        // 완료한 할 일은 알림에서 사라진다
+        val items = dao.onDay(day).filter { it.isEvent || !it.isDone(day) }
+        val dd = upcoming(dao.ddayList(), t).take(MAX_DDAY)
+        val title = "${t.monthValue}/${t.dayOfMonth}" + (Weather.tempText(ctx)?.let { " - $it" } ?: "")
+
+        val big = RemoteViews(ctx.packageName, R.layout.notif_big)
+        big.setTextViewText(R.id.title, title)
+        fun add(layout: Int, text: String, click: PendingIntent? = null) {
+            val v = RemoteViews(ctx.packageName, layout)
+            v.setTextViewText(R.id.t, text)
+            if (click != null) v.setOnClickPendingIntent(R.id.t, click)
+            big.addView(R.id.rows, v)
+        }
+        add(R.layout.notif_head, "할 일")
+        if (items.isEmpty()) add(R.layout.notif_row, "없음")
+        items.take(MAX_TODO).forEach { add(R.layout.notif_row, line(it, day), if (it.isEvent) null else toggle(ctx, it, day)) }
+        if (items.size > MAX_TODO) add(R.layout.notif_row, "… 외 ${items.size - MAX_TODO}개")
+        add(R.layout.notif_head, "D-day")
+        if (dd.isEmpty()) add(R.layout.notif_row, "없음")
+        dd.forEach { add(R.layout.notif_row, ddayLabel(it, t)) }
+
         val open = PendingIntent.getActivity(
             ctx, 0, Intent(ctx, MainActivity::class.java),
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
         )
+        val todoCount = items.count { !it.isEvent }
         val n = NotificationCompat.Builder(ctx, CH)
             .setSmallIcon(android.R.drawable.ic_menu_my_calendar)
-            .setContentTitle("${t.monthValue}/${t.dayOfMonth} · 할 일 ${todos.count { it.isDone(day) }}/${todos.size}")
-            .setContentText(dd.firstOrNull()?.let { ddayLabel(it, t) } ?: items.firstOrNull()?.let { line(it, day) } ?: "오늘 일정 없음")
-            .setStyle(style)
+            .setContentTitle(title)
+            .setContentText("할 일 ${if (todoCount == 0) "없음" else "${todoCount}개"}" + (dd.firstOrNull()?.let { " · " + ddayLabel(it, t) } ?: ""))
+            .setStyle(NotificationCompat.DecoratedCustomViewStyle())
+            .setCustomBigContentView(big)
             .setOngoing(true)
             .setOnlyAlertOnce(true)
             .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
             .setContentIntent(open)
             .build()
         nm.notify(ID, n)
+    }
+
+    private fun toggle(ctx: Context, e: Entry, day: Long) = PendingIntent.getBroadcast(
+        ctx, e.id.toInt(),
+        Intent(ctx, ToggleReceiver::class.java)
+            .setData(Uri.parse("todo://${e.id}/$day"))
+            .putExtra("id", e.id).putExtra("day", day),
+        PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+    )
+}
+
+/** 알림에서 할 일을 눌렀을 때 완료 처리 */
+class ToggleReceiver : BroadcastReceiver() {
+    override fun onReceive(c: Context, i: Intent) {
+        val id = i.getLongExtra("id", 0L)
+        val day = i.getLongExtra("day", 0L)
+        val p = goAsync()
+        CoroutineScope(Dispatchers.Default).launch {
+            try {
+                Db.get(c).setDone(id, day, true)
+                Refresh.all(c, fire = false)
+            } finally { p.finish() }
+        }
     }
 }
 
