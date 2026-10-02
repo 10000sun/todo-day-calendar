@@ -21,6 +21,7 @@ import androidx.glance.appwidget.GlanceAppWidgetReceiver
 import androidx.glance.appwidget.action.actionStartActivity
 import androidx.glance.appwidget.cornerRadius
 import androidx.glance.appwidget.provideContent
+import androidx.glance.appwidget.updateAll
 import androidx.glance.background
 import androidx.glance.layout.Alignment
 import androidx.glance.layout.Box
@@ -34,8 +35,10 @@ import androidx.glance.layout.fillMaxSize
 import androidx.glance.layout.padding
 import androidx.glance.text.FontWeight
 import androidx.glance.text.Text
+import androidx.glance.text.TextDecoration
 import androidx.glance.text.TextStyle
 import androidx.glance.unit.ColorProvider
+import kotlinx.coroutines.CancellationException
 import java.time.DayOfWeek
 import java.time.LocalDate
 import java.time.YearMonth
@@ -44,16 +47,18 @@ import java.util.Locale
 
 private val KEY_ID = ActionParameters.Key<Long>("id")
 private val KEY_DAY = ActionParameters.Key<Long>("day")
+private val KEY_DONE = ActionParameters.Key<Boolean>("done")
 
-private fun toggle(e: Entry, day: Long) =
-    actionRunCallback(ToggleAction::class.java, actionParametersOf(KEY_ID to e.id, KEY_DAY to day))
+/** done=true: 완료 처리, false: 완료 취소 */
+private fun toggle(e: Entry, day: Long, done: Boolean = true) =
+    actionRunCallback(ToggleAction::class.java, actionParametersOf(KEY_ID to e.id, KEY_DAY to day, KEY_DONE to done))
 
 /** 위젯에서 할 일을 눌렀을 때 완료 처리 후 위젯/알림 갱신 */
 class ToggleAction : ActionCallback {
     override suspend fun onAction(context: Context, glanceId: GlanceId, parameters: ActionParameters) {
         val id = parameters[KEY_ID] ?: return
         val day = parameters[KEY_DAY] ?: return
-        Db.get(context).setDone(id, day, true)
+        Db.get(context).setDone(id, day, parameters[KEY_DONE] ?: true)
         Refresh.all(context, userEdit = true)
     }
 }
@@ -68,13 +73,16 @@ class TodayWidget : GlanceAppWidget() {
 
 /** 한 줄: 체크 표시(mark)만 누르면 완료(toggle), 나머지 영역은 앱 열기(open). toggle이 null이면 표시만 */
 @Composable
-private fun EntryRow(mark: String, text: String, color: ColorProvider, size: TextUnit, toggle: Action?, open: Action) {
+private fun EntryRow(mark: String, text: String, color: ColorProvider, size: TextUnit, toggle: Action?, open: Action, strike: Boolean = false) {
     Row(GlanceModifier.fillMaxWidth().clickable(open), verticalAlignment = Alignment.CenterVertically) {
         if (mark.isNotEmpty()) {
             val m = GlanceModifier.padding(end = 10.dp, top = 4.dp, bottom = 4.dp)
             Text(mark, if (toggle != null) m.clickable(toggle) else m, style = TextStyle(color = color, fontSize = (size.value + 3).sp))
         }
-        Text(text, GlanceModifier.defaultWeight().padding(vertical = 4.dp), style = TextStyle(color = color, fontSize = size))
+        Text(
+            text, GlanceModifier.defaultWeight().padding(vertical = 4.dp),
+            style = TextStyle(color = color, fontSize = size, textDecoration = if (strike) TextDecoration.LineThrough else null)
+        )
     }
 }
 
@@ -117,87 +125,134 @@ class TodayWidgetReceiver : GlanceAppWidgetReceiver() {
     override val glanceAppWidget = TodayWidget()
 }
 
-/** 홈 화면 월간 달력 위젯 (바탕화면 달력 느낌) */
+private const val MONTH_PREF = "month_widget"
+
+/** 월간 위젯에서 선택한 날짜 (이번 달 안일 때만, 아니면 오늘) */
+private fun selectedDay(ctx: Context, today: LocalDate): LocalDate {
+    val s = LocalDate.ofEpochDay(ctx.getSharedPreferences(MONTH_PREF, Context.MODE_PRIVATE).getLong("sel", today.toEpochDay()))
+    return if (YearMonth.from(s) == YearMonth.from(today)) s else today
+}
+
+/** 달력의 날짜를 눌렀을 때: 선택 날짜를 저장하고 위젯을 다시 그린다 */
+class SelectDayAction : ActionCallback {
+    override suspend fun onAction(context: Context, glanceId: GlanceId, parameters: ActionParameters) {
+        val day = parameters[KEY_DAY] ?: return
+        context.getSharedPreferences(MONTH_PREF, Context.MODE_PRIVATE).edit().putLong("sel", day).apply()
+        MonthWidget().updateAll(context)
+    }
+}
+
+/** 홈 화면 월간 달력 위젯: 날짜를 누르면 그 날의 일정/할 일이 아래에 표시되고, 일정·할 일이 있는 날은 점으로 표시 */
 class MonthWidget : GlanceAppWidget() {
     override suspend fun provideGlance(context: Context, id: GlanceId) {
         val today = LocalDate.now()
         val ym = YearMonth.from(today)
-        var marked = emptySet<Int>()
+        val sel = selectedDay(context, today)
+        var eventDays = emptySet<Int>()
+        var todoDays = emptySet<Int>()
         var items = emptyList<Entry>()
-        var dd = emptyList<Entry>()
         try {
             val dao = Db.get(context).dao()
             val entries = dao.visibleNow(ym.atDay(1).toEpochDay(), ym.atEndOfMonth().toEpochDay())
-            marked = (1..ym.lengthOfMonth()).filter { d -> entries.any { it.occursOn(ym.atDay(d).toEpochDay()) } }.toSet()
-            val day = today.toEpochDay()
-            items = dao.onDay(day).filter { it.isEvent || !it.isDone(day) }
-            dd = upcoming(dao.ddayList(), today).take(1)
-        } catch (e: kotlinx.coroutines.CancellationException) {
+            val days = (1..ym.lengthOfMonth())
+            eventDays = days.filter { d -> entries.any { it.isEvent && it.occursOn(ym.atDay(d).toEpochDay()) } }.toSet()
+            todoDays = days.filter { d -> entries.any { !it.isEvent && it.occursOn(ym.atDay(d).toEpochDay()) } }.toSet()
+            items = dao.onDay(sel.toEpochDay())
+        } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
             // 데이터를 못 읽어도 달력 틀은 보여준다
         }
-        provideContent { MonthBody(ym, today, marked, dd, items) }
+        provideContent { MonthBody(ym, today, sel, eventDays, todoDays, items) }
     }
 }
 
+private val EVENT_DOT = Color(0xFFFFB74D)
+private val TODO_DOT = Color(0xFF4FC3F7)
+
 @Composable
-private fun MonthBody(ym: YearMonth, today: LocalDate, marked: Set<Int>, dd: List<Entry>, items: List<Entry>) {
-    val white = Color.White
-    val openApp = actionStartActivity(Intent(LocalContext.current, MainActivity::class.java))
+private fun MonthBody(ym: YearMonth, today: LocalDate, sel: LocalDate, eventDays: Set<Int>, todoDays: Set<Int>, items: List<Entry>) {
+    val white = ColorProvider(Color.White)
+    val open = actionStartActivity(Intent(LocalContext.current, MainActivity::class.java))
+    val selDay = sel.toEpochDay()
     Column(
         GlanceModifier.fillMaxSize()
             .background(ColorProvider(Color(0xE61E1E2E)))
             .cornerRadius(16.dp)
             .padding(8.dp)
-            .clickable(openApp)
+            .clickable(open)
     ) {
         Text(
-            "${ym.year}년 ${ym.monthValue}월",
-            style = TextStyle(color = ColorProvider(white), fontSize = 15.sp, fontWeight = FontWeight.Bold)
+            "${ym.year}년 ${ym.monthValue}월", GlanceModifier.fillMaxWidth().padding(bottom = 2.dp),
+            style = TextStyle(color = white, fontSize = 15.sp, fontWeight = FontWeight.Bold)
         )
         Row(GlanceModifier.fillMaxWidth()) {
-            listOf("일", "월", "화", "수", "목", "금", "토").forEach { Cell(it, Color(0xB3FFFFFF)) }
+            listOf("일", "월", "화", "수", "목", "금", "토").forEach {
+                Box(GlanceModifier.defaultWeight().height(18.dp), contentAlignment = Alignment.Center) {
+                    Text(it, style = TextStyle(color = ColorProvider(Color(0xB3FFFFFF)), fontSize = 11.sp))
+                }
+            }
         }
         val cells = List(ym.atDay(1).dayOfWeek.value % 7) { 0 } + (1..ym.lengthOfMonth())
         cells.chunked(7).forEach { week ->
             Row(GlanceModifier.fillMaxWidth()) {
                 for (i in 0 until 7) {
                     val d = week.getOrElse(i) { 0 }
-                    if (d == 0) { Cell("", white); continue }
-                    val dow = ym.atDay(d).dayOfWeek
-                    val isToday = ym.atDay(d) == today
-                    Cell(
-                        d.toString(),
-                        color = when {
-                            isToday -> white
-                            d in marked -> Color(0xFFFFB74D)
-                            dow == DayOfWeek.SUNDAY -> Color(0xFFFF8A80)
-                            dow == DayOfWeek.SATURDAY -> Color(0xFF82B1FF)
-                            else -> white
-                        },
-                        bg = if (isToday) Color(0xFF6750A4) else null,
-                        bold = d in marked || isToday
-                    )
+                    DayCell(if (d == 0) null else ym.atDay(d), today, sel, d in eventDays, d in todoDays)
                 }
             }
         }
-        dd.forEach { Text(ddayLabel(it, today), style = TextStyle(color = ColorProvider(Color(0xFFFFB74D)), fontSize = 12.sp)) }
-        items.take(2).forEach {
-            EntryRow(if (it.isEvent) "◆" else "☐", body(it), ColorProvider(white), 12.sp, if (it.isEvent) null else toggle(it, today.toEpochDay()), openApp)
+        Text(
+            "${sel.monthValue}월 ${sel.dayOfMonth}일 (${sel.dayOfWeek.getDisplayName(DayStyle.SHORT, Locale.KOREAN)})" +
+                if (items.isEmpty()) " · 없음" else "",
+            GlanceModifier.fillMaxWidth().padding(top = 6.dp),
+            style = TextStyle(color = white, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+        )
+        items.take(MONTH_ROWS).forEach {
+            val done = it.isDone(selDay)
+            EntryRow(
+                if (it.isEvent) "◆" else if (done) "☑" else "☐", body(it), white, 12.sp,
+                if (it.isEvent) null else toggle(it, selDay, !done), open, strike = done
+            )
         }
+        if (items.size > MONTH_ROWS) Text("… 외 ${items.size - MONTH_ROWS}개", style = TextStyle(color = white, fontSize = 11.sp))
     }
 }
 
+private const val MONTH_ROWS = 3
+
+/** 날짜 칸: 선택한 날은 배경색, 오늘은 보라색 글자, 일정은 주황 점 / 할 일은 하늘색 점 */
 @Composable
-private fun RowScope.Cell(text: String, color: Color, bg: Color? = null, bold: Boolean = false) {
-    Box(GlanceModifier.defaultWeight().height(20.dp), contentAlignment = Alignment.Center) {
-        val m = GlanceModifier.size(18.dp)
-        Box(if (bg != null) m.background(ColorProvider(bg)).cornerRadius(9.dp) else m, contentAlignment = Alignment.Center) {
+private fun RowScope.DayCell(d: LocalDate?, today: LocalDate, sel: LocalDate, hasEvent: Boolean, hasTodo: Boolean) {
+    val cell = GlanceModifier.defaultWeight().height(32.dp).padding(1.dp)
+    if (d == null) { Box(cell) {}; return }
+    val isSel = d == sel
+    val isToday = d == today
+    val color = when {
+        isSel -> Color.White
+        isToday -> Color(0xFFB39DFF)
+        d.dayOfWeek == DayOfWeek.SUNDAY -> Color(0xFFFF8A80)
+        d.dayOfWeek == DayOfWeek.SATURDAY -> Color(0xFF82B1FF)
+        else -> Color.White
+    }
+    val select = actionRunCallback(SelectDayAction::class.java, actionParametersOf(KEY_DAY to d.toEpochDay()))
+    val inner = GlanceModifier.fillMaxSize()
+    Box(cell.clickable(select), contentAlignment = Alignment.Center) {
+        Column(
+            if (isSel) inner.background(ColorProvider(Color(0xFF6750A4))).cornerRadius(8.dp) else inner,
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
             Text(
-                text,
-                style = TextStyle(color = ColorProvider(color), fontSize = 11.sp, fontWeight = if (bold) FontWeight.Bold else FontWeight.Normal)
+                d.dayOfMonth.toString(),
+                style = TextStyle(color = ColorProvider(color), fontSize = 12.sp, fontWeight = if (isToday || isSel) FontWeight.Bold else FontWeight.Normal)
             )
+            Row {
+                if (hasEvent) Text("●", style = TextStyle(color = ColorProvider(EVENT_DOT), fontSize = 7.sp))
+                if (hasTodo) Text("●", style = TextStyle(color = ColorProvider(TODO_DOT), fontSize = 7.sp))
+                // 점이 없는 날도 같은 높이를 차지하도록 투명 점 하나
+                if (!hasEvent && !hasTodo) Text("●", style = TextStyle(color = ColorProvider(Color.Transparent), fontSize = 7.sp))
+            }
         }
     }
 }
