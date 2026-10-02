@@ -153,10 +153,14 @@ object Widgets {
     /** 한 줄: mark(☐/☑/◆)만 누르면 toggle, 나머지 영역은 앱 열기 */
     private fun addRow(
         ctx: Context, parent: RemoteViews, container: Int, mark: String, text: CharSequence,
-        color: Int, sizeSp: Float, toggle: PendingIntent?, open: PendingIntent
+        color: Int, sizeSp: Float, toggle: PendingIntent?, open: PendingIntent, keepHeight: Boolean = false
     ) {
         val r = RemoteViews(ctx.packageName, R.layout.widget_row)
-        if (mark.isEmpty()) r.setViewVisibility(R.id.w_mark, View.GONE)
+        if (mark.isEmpty()) {
+            // keepHeight: 표시는 숨기되 자리(높이)는 유지 -> 줄 높이가 항상 같다
+            if (keepHeight) { r.setTextViewText(R.id.w_mark, "☐"); r.setTextViewTextSize(R.id.w_mark, TypedValue.COMPLEX_UNIT_SP, sizeSp + 3); r.setViewVisibility(R.id.w_mark, View.INVISIBLE) }
+            else r.setViewVisibility(R.id.w_mark, View.GONE)
+        }
         else {
             r.setTextViewText(R.id.w_mark, mark)
             r.setTextColor(R.id.w_mark, color)
@@ -259,8 +263,8 @@ object Widgets {
             v.addView(R.id.w_grid, row)
         }
 
-        // 아래 목록: 달력 칸이 최소 28dp는 되도록 남는 높이만큼만 (패딩16 + 제목22 + 요일16 + 날짜 머리글22)
-        val listRows = (((heightDp - 54f - 22f - weeks.size * 28f) / ROW_H).toInt()).coerceIn(0, 3)
+        // 아래 구역: 달력 칸이 최소 28dp는 되도록 남는 높이만큼의 줄 수로 고정 (패딩16 + 제목22 + 요일16 / 머리글22 + 구역 여백10)
+        val listRows = (((heightDp - 54f - 32f - weeks.size * 28f) / ROW_H).toInt()).coerceIn(0, 3)
         v.removeAllViews(R.id.w_list)
         if (listRows == 0) {
             v.setViewVisibility(R.id.w_list, View.GONE)
@@ -273,15 +277,20 @@ object Widgets {
                 "${m.sel.monthValue}월 ${m.sel.dayOfMonth}일 ($dow)" + (m.selHoliday?.let { " · $it" } ?: "") + if (m.items.isEmpty()) " · 없음" else ""
             )
             val more = m.items.size > listRows
-            m.items.take(if (more) listRows - 1 else listRows).forEach { e ->
+            val shown = m.items.take(if (more) listRows - 1 else listRows)
+            shown.forEach { e ->
                 val done = e.isDone(selDay)
                 addRow(
                     ctx, v, R.id.w_list, if (e.isEvent) "◆" else if (done) "☑" else "☐",
                     if (done) struck(body(e)) else body(e), WHITE, 12f,
-                    if (e.isEvent) null else toggle(ctx, e, selDay, !done), open
+                    if (e.isEvent) null else toggle(ctx, e, selDay, !done), open, keepHeight = true
                 )
             }
-            if (more) addRow(ctx, v, R.id.w_list, "", "… 외 ${m.items.size - (listRows - 1)}개", WHITE, 11f, null, open)
+            if (more) addRow(ctx, v, R.id.w_list, "", "… 외 ${m.items.size - (listRows - 1)}개", WHITE, 12f, null, open, keepHeight = true)
+            // 남는 줄은 빈 줄로 채워서, 항목이 몇 개든 아래 구역(과 위의 달력) 높이가 변하지 않게 한다
+            repeat(maxOf(0, listRows - shown.size - if (more) 1 else 0)) {
+                addRow(ctx, v, R.id.w_list, "", " ", WHITE, 12f, null, open, keepHeight = true)
+            }
         }
         return v
     }

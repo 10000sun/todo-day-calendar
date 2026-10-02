@@ -51,9 +51,16 @@
         android:layout_weight="1"
         android:orientation="vertical" />
 
+    <!-- 아래 구역: 선택한 날짜의 일정/할 일. 항상 같은 줄 수를 차지해서(빈 줄로 채움) 달력이 출렁이지 않는다 -->
     <LinearLayout
         android:id="@+id/w_list"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:orientation="vertical" />
+        android:layout_marginTop="4dp"
+        android:background="@drawable/widget_section_bg"
+        android:orientation="vertical"
+        android:paddingStart="8dp"
+        android:paddingTop="2dp"
+        android:paddingEnd="8dp"
+        android:paddingBottom="4dp" />
 </LinearLayout>
