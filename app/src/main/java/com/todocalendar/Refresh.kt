@@ -19,7 +19,8 @@ import java.util.concurrent.TimeUnit
 
 /** 위젯 + 잠금화면 알림을 한 번에 갱신 */
 object Refresh {
-    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    /** 처리되지 않은 예외로 앱이 죽지 않도록 기록만 한다 (백그라운드 갱신/백업 실패가 앱 종료로 이어지지 않게) */
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default + CoroutineExceptionHandler { _, e -> Log.w("Refresh", e) })
     /** 갱신이 겹치면 오래된 요약이 최신 알림을 덮어쓰거나 알림이 중복 발송되므로 한 번에 하나씩 */
     private val lock = Mutex()
     fun fire(ctx: Context) { scope.launch { all(ctx) } }
@@ -41,14 +42,10 @@ object Refresh {
     /** 화면(컴포지션)이 사라져도 취소되지 않도록 앱 범위에서 실행 */
     fun launch(block: suspend () -> Unit) { scope.launch { block() } }
 
-    /** 위젯 한 개 갱신이 오래 걸려도(최대 10초) 다른 작업이 영원히 막히지 않도록 */
+    /** 위젯 갱신이 오래 걸려도(최대 8초) 다른 작업이 영원히 막히지 않도록 */
     private const val WIDGET_TIMEOUT = 8_000L
     /** 위젯 갱신끼리는 한 번에 하나씩 */
     private val widgetLock = Mutex()
-
-    suspend fun updateMonthWidget(ctx: Context) = widgetLock.withLock {
-        step { withTimeoutOrNull(WIDGET_TIMEOUT) { Widgets.updateMonth(ctx) } }
-    }
 
     private suspend fun updateWidgets(ctx: Context) = widgetLock.withLock {
         step { withTimeoutOrNull(WIDGET_TIMEOUT) { Widgets.updateAll(ctx) } }
@@ -137,7 +134,7 @@ object LockNotifier {
         add(R.layout.notif_head, if (dd.isEmpty()) "D-day 없음" else "D-day")
         // D-day로 지정한 할 일도 줄을 눌러 완료 (해당 D-day 날짜 기준)
         dd.forEach { (e, d) ->
-            add(R.layout.notif_row, (if (e.isEvent) "" else "☐ ") + ddayLabel(e, t), if (e.isEvent) null else toggle(ctx, e, d))
+            add(R.layout.notif_row, (if (e.isEvent) "" else "☐ ") + ddayLabel(e, d, t), if (e.isEvent) null else toggle(ctx, e, d))
         }
 
         val open = PendingIntent.getActivity(
@@ -148,7 +145,7 @@ object LockNotifier {
         val n = NotificationCompat.Builder(ctx, CH)
             .setSmallIcon(android.R.drawable.ic_menu_my_calendar)
             .setContentTitle(title)
-            .setContentText("할 일 ${if (todoCount == 0) "없음" else "${todoCount}개"}" + (dd.firstOrNull()?.let { " · " + ddayLabel(it.first, t) } ?: ""))
+            .setContentText("할 일 ${if (todoCount == 0) "없음" else "${todoCount}개"}" + (dd.firstOrNull()?.let { (e, d) -> " · " + ddayLabel(e, d, t) } ?: ""))
             .setStyle(NotificationCompat.DecoratedCustomViewStyle())
             .setCustomBigContentView(big)
             .setOngoing(true)

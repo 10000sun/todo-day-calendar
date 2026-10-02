@@ -148,10 +148,10 @@ fun ddayTag(daysLeft: Long): String = when {
     else -> "D+${-daysLeft}"
 }
 
-fun ddayLabel(e: Entry, today: LocalDate = LocalDate.now()): String {
-    val t = today.toEpochDay()
-    return ddayTag((e.nextOn(t) ?: e.date) - t) + " " + e.title
-}
+fun ddayLabel(e: Entry, today: LocalDate = LocalDate.now()): String = ddayLabel(e, e.nextOn(today.toEpochDay()) ?: e.date, today)
+
+/** upcomingDates 가 돌려준 표시 날짜 기준 라벨 (이번 회차를 완료한 반복 할 일은 다음 회차 날짜로 계산된다) */
+fun ddayLabel(e: Entry, date: Long, today: LocalDate): String = ddayTag(date - today.toEpochDay()) + " " + e.title
 
 fun line(e: Entry, day: Long) =
     (if (e.isEvent) "◆ " else if (e.isDone(day)) "☑ " else "☐ ") + (if (e.timeMin >= 0) e.timeText() + " " else "") + e.title

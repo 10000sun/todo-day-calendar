@@ -51,6 +51,7 @@ class MainActivity : ComponentActivity() {
     private var showGuide by mutableStateOf(false)
     /** '?' 버튼으로 다시 열어 본 사용법 */
     private var showHelp by mutableStateOf(false)
+    private val syncing = java.util.concurrent.atomic.AtomicBoolean(false)
 
     private val askPerms = registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) {
         refreshAll()
@@ -86,15 +87,19 @@ class MainActivity : ComponentActivity() {
             return
         }
         if (Backup.resolved(app)) return
+        // onStart / 권한 결과 콜백이 겹쳐 호출돼도 확인은 한 번에 하나만 (복원·토스트·팝업이 중복되지 않도록)
+        if (!syncing.compareAndSet(false, true)) return
         Refresh.launch {
-            val n = Backup.peek()
-            val count = Db.get(app).dao().all().size
-            when {
-                n == Backup.NOT_BACKUP -> { pendingExisting = Backup.NOT_BACKUP }   // 읽을 수 없는 파일: 덮어쓸지 사용자에게 묻는다
-                n == null || n == 0 -> { Backup.setResolved(app); Backup.write(app) }
-                count == 0 -> restoreAuto()
-                else -> { pendingExisting = n }
-            }
+            try {
+                val n = Backup.peek()
+                val count = Db.get(app).dao().all().size
+                when {
+                    n == Backup.NOT_BACKUP -> { pendingExisting = Backup.NOT_BACKUP }   // 읽을 수 없는 파일: 덮어쓸지 사용자에게 묻는다
+                    n == null || n == 0 -> { Backup.setResolved(app); Backup.write(app) }
+                    count == 0 -> restoreAuto()
+                    else -> { pendingExisting = n }
+                }
+            } finally { syncing.set(false) }
         }
     }
 
@@ -134,12 +139,14 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    private fun askRuntimePermissions() {
+    /** 요청 창을 실제로 띄웠으면 true (결과 콜백이 이어서 백업 연결을 진행한다) */
+    private fun askRuntimePermissions(): Boolean {
         val need = buildList {
             if (Build.VERSION.SDK_INT >= 33) add(Manifest.permission.POST_NOTIFICATIONS)
             add(Manifest.permission.ACCESS_COARSE_LOCATION)
         }.filter { checkSelfPermission(it) != PackageManager.PERMISSION_GRANTED }
         if (need.isNotEmpty()) askPerms.launch(need.toTypedArray())
+        return need.isNotEmpty()
     }
 
     private fun closeGuide() {
@@ -148,8 +155,8 @@ class MainActivity : ComponentActivity() {
         showHelp = false
         if (first) {
             Guide.markSeen(applicationContext)
-            askRuntimePermissions()
-            syncBackup()   // 안내 때문에 미뤄 둔 백업 안내/연결을 이어서 진행
+            // 권한 요청 창이 떠 있으면 그 결과 콜백에서 이어서 진행해 팝업이 겹치지 않게 한다
+            if (!askRuntimePermissions()) syncBackup()   // 안내 때문에 미뤄 둔 백업 안내/연결을 이어서 진행
         }
     }
 
@@ -231,7 +238,7 @@ fun CalendarScreen(onOpenBackup: () -> Unit, onOpenHelp: () -> Unit) {
 
     val dayEntries by remember(selected) { entryDao.visible(selected.toEpochDay(), selected.toEpochDay()) }
         .collectAsState(emptyList())
-    val soon = remember(ddays, today) { upcoming(ddays, today) }
+    val soon = remember(ddays, today) { upcomingDates(ddays, today) }
 
     fun write(block: suspend Db.() -> Unit) {
         val app = ctx.applicationContext
@@ -244,10 +251,10 @@ fun CalendarScreen(onOpenBackup: () -> Unit, onOpenHelp: () -> Unit) {
         Column(Modifier.padding(pad).padding(horizontal = 12.dp)) {
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                 LazyRow(Modifier.weight(1f), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    items(soon, key = { it.id }) { e ->
+                    items(soon, key = { it.first.id }) { (e, d) ->
                         AssistChip(
-                            onClick = { selected = LocalDate.ofEpochDay(e.nextOn(today.toEpochDay()) ?: e.date); month = YearMonth.from(selected) },
-                            label = { Text(ddayLabel(e, today)) }
+                            onClick = { selected = LocalDate.ofEpochDay(d); month = YearMonth.from(selected) },
+                            label = { Text(ddayLabel(e, d, today)) }
                         )
                     }
                 }

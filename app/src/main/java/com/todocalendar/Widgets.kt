@@ -23,6 +23,8 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import java.time.DayOfWeek
 import java.time.LocalDate
 import java.time.YearMonth
@@ -104,16 +106,22 @@ object Widgets {
         updateMonth(ctx)
     }
 
-    suspend fun updateToday(ctx: Context) {
+    /**
+     * 그리기(데이터 읽기 + 반영)는 한 번에 하나씩: 공급자/날짜 선택/Refresh 가 겹쳐도, 먼저 읽은 낡은 데이터가
+     * 나중에 읽은 최신 그림을 덮어쓰지 못한다 (예: 날짜를 누른 직후 다른 갱신이 이전 선택으로 다시 그리는 경우)
+     */
+    private val drawLock = Mutex()
+
+    suspend fun updateToday(ctx: Context) = drawLock.withLock {
         val ids = ids(ctx, TodayWidgetReceiver::class.java)
-        if (ids.isEmpty()) return
+        if (ids.isEmpty()) return@withLock
         val s = Summary.load(ctx)
         ids.forEach { id -> push(ctx, id) { today(ctx, s, heightDp(ctx, id)) } }
     }
 
-    suspend fun updateMonth(ctx: Context) {
+    suspend fun updateMonth(ctx: Context) = drawLock.withLock {
         val ids = ids(ctx, MonthWidgetReceiver::class.java)
-        if (ids.isEmpty()) return
+        if (ids.isEmpty()) return@withLock
         val m = MonthData.load(ctx)
         ids.forEach { id -> push(ctx, id) { month(ctx, m, heightDp(ctx, id)) } }
     }
@@ -209,7 +217,7 @@ object Widgets {
         if (todoMore) addRow(ctx, v, R.id.w_rows, "", "… 외 ${s.items.size - todoRows}개", WHITE, 12f, null, open)
         addHead(ctx, v, R.id.w_rows, if (s.dd.isEmpty()) "D-day 없음" else "D-day")
         s.dd.take(ddRows).forEach { (e, d) ->
-            addRow(ctx, v, R.id.w_rows, if (e.isEvent) "" else "☐", ddayLabel(e, s.today), ORANGE, 13f, if (e.isEvent) null else toggle(ctx, e, d), open)
+            addRow(ctx, v, R.id.w_rows, if (e.isEvent) "" else "☐", ddayLabel(e, d, s.today), ORANGE, 13f, if (e.isEvent) null else toggle(ctx, e, d), open)
         }
         if (ddMore) addRow(ctx, v, R.id.w_rows, "", "… 외 ${s.dd.size - ddRows}개", ORANGE, 12f, null, open)
         return v

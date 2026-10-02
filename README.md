@@ -1,5 +1,5 @@
 # 투두데이 캘린더
-달력 + 일별 투두 + D-day 안드로이드 앱 (Kotlin / Compose / Room / Glance). 최소 Android 8.0.
+달력 + 일별 투두 + D-day 안드로이드 앱 (Kotlin / Compose / Room, 위젯은 표준 RemoteViews). 최소 Android 8.0.
 
 ## 기능
 - 달력에서 날짜 선택 → `＋`로 할 일/일정 추가, 항목을 누르면 수정

@@ -28,6 +28,9 @@ object Backup {
     const val NOT_BACKUP = -1
     const val PATH_TEXT = "Documents/TodoDayCalendar/todo-day-calendar-backup.json"
     private val writeLock = Mutex()
+    /** 서기 1년 ~ 9999년 (epochDay) */
+    private const val MIN_DAY = -719_162L
+    private const val MAX_DAY = 2_932_896L
 
     private fun prefs(c: Context) = c.getSharedPreferences(PREF, Context.MODE_PRIVATE)
 
@@ -71,8 +74,11 @@ object Backup {
             val o = arr.getJSONObject(it)
             // 손으로 고친/깨진 파일의 범위 밖 시각이 알림 예약(LocalTime.of)을 영구히 실패시키지 않도록 보정
             val timeMin = o.getInt("timeMin").let { t -> if (t in 0..1439) t else -1 }
+            // 범위 밖 날짜(LocalDate.ofEpochDay 가 던짐)가 달력/위젯을 매번 죽이지 않도록 파일째 거부
+            val date = o.getLong("date")
+            require(date in MIN_DAY..MAX_DAY) { "날짜가 범위를 벗어났습니다" }
             Entry(
-                id = o.getLong("id"), date = o.getLong("date"), title = o.getString("title"),
+                id = o.getLong("id"), date = date, title = o.getString("title"),
                 isEvent = o.getBoolean("isEvent"), dday = o.getBoolean("dday"),
                 repeat = runCatching { Repeat.valueOf(o.getString("repeat")) }.getOrDefault(Repeat.NONE),
                 timeMin = timeMin, remind = o.getBoolean("remind") && timeMin >= 0, doneDates = o.optString("doneDates", ""),
