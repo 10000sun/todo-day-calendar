@@ -10,6 +10,8 @@ import android.net.Uri
 import android.provider.Settings
 import android.os.Build
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -59,7 +61,6 @@ class MainActivity : ComponentActivity() {
         Weather.captureLocation(app) { Refresh.fire(app) }
     }
 
-    private fun toast(msg: String) = runOnUiThread { Toast.makeText(this, msg, Toast.LENGTH_LONG).show() }
 
     /** 자동 백업에 필요한 권한 설정 열기 (Android 11+: 모든 파일 접근 화면, 10 이하: 저장소 권한 요청) */
     private fun openAccessSettings() {
@@ -85,10 +86,10 @@ class MainActivity : ComponentActivity() {
             val n = Backup.peek()
             val count = Db.get(app).dao().all().size
             when {
-                n == Backup.NOT_BACKUP -> toast("백업 폴더의 파일을 읽을 수 없거나 형식이 달라 자동 백업을 시작하지 못했습니다 (${Backup.PATH_TEXT})")
+                n == Backup.NOT_BACKUP -> { pendingExisting = Backup.NOT_BACKUP }   // 읽을 수 없는 파일: 덮어쓸지 사용자에게 묻는다
                 n == null || n == 0 -> { Backup.setResolved(app); Backup.write(app) }
                 count == 0 -> restoreAuto()
-                else -> runOnUiThread { pendingExisting = n }
+                else -> { pendingExisting = n }
             }
         }
     }
@@ -97,10 +98,10 @@ class MainActivity : ComponentActivity() {
         val app = applicationContext
         Refresh.launch {
             val n = Backup.restoreFile(app)
-            if (n == null) { toast("백업을 복원하지 못했습니다"); return@launch }
+            if (n == null) { toastApp(app, "백업을 복원하지 못했습니다"); return@launch }
             Backup.setResolved(app)
             Refresh.all(app)
-            toast("${n}개 항목을 복원했습니다")
+            toastApp(app, "${n}개 항목을 복원했습니다")
         }
     }
 
@@ -108,7 +109,7 @@ class MainActivity : ComponentActivity() {
         val app = applicationContext
         Refresh.launch {
             Backup.setResolved(app)
-            toast(if (Backup.write(app)) "현재 데이터로 자동 백업을 시작했습니다" else "백업 파일에 쓰지 못했습니다")
+            toastApp(app, if (Backup.write(app)) "현재 데이터로 자동 백업을 시작했습니다" else "백업 파일에 쓰지 못했습니다")
         }
     }
 
@@ -117,11 +118,15 @@ class MainActivity : ComponentActivity() {
         val app = applicationContext
         Refresh.launch {
             val n = Backup.restore(app, uri)
-            if (n == null) { toast("복원하지 못했습니다. 투두데이 캘린더 백업 파일인지 확인해 주세요"); return@launch }
-            Backup.setResolved(app)
-            Backup.autoWrite(app)
+            if (n == null) { toastApp(app, "복원하지 못했습니다. 투두데이 캘린더 백업 파일인지 확인해 주세요"); return@launch }
+            // 권한이 없으면 고정 위치의 기존 백업을 아직 확인하지 못한 것이므로 '정리 완료'로 표시하지 않는다
+            // (표시하면 나중에 권한을 허용해도 기존 백업을 묻지 않고 덮어쓰게 된다)
+            if (Backup.hasAccess(app)) {
+                Backup.setResolved(app)
+                Backup.autoWrite(app)
+            }
             Refresh.all(app)
-            toast("${n}개 항목을 복원했습니다")
+            toastApp(app, "${n}개 항목을 복원했습니다")
         }
     }
 
@@ -142,18 +147,29 @@ class MainActivity : ComponentActivity() {
                         onRestore = { showBackup = false; pickRestore.launch(arrayOf("*/*")) }
                     )
                     pendingExisting?.let { n ->
+                        val unreadable = n < 0
                         AlertDialog(
                             onDismissRequest = { pendingExisting = null },
-                            title = { Text("이전에 저장된 백업이 있습니다") },
+                            title = { Text(if (unreadable) "백업 파일을 읽을 수 없습니다" else "이전에 저장된 백업이 있습니다") },
                             text = {
                                 Text(
-                                    "${Backup.PATH_TEXT}에 ${n}개 항목이 저장돼 있습니다.\n\n" +
-                                        "• 복원: 현재 데이터를 이 백업으로 교체합니다.\n" +
-                                        "• 덮어쓰기: 현재 데이터로 기존 백업을 지웁니다."
+                                    if (unreadable)
+                                        "${Backup.PATH_TEXT}의 내용이 손상됐거나 투두데이 캘린더 백업이 아닙니다.\n\n" +
+                                            "덮어쓰면 현재 데이터로 새 백업을 시작합니다. 나중에 정하려면 '나중에'를 누르세요."
+                                    else
+                                        "${Backup.PATH_TEXT}에 ${n}개 항목이 저장돼 있습니다.\n\n" +
+                                            "• 복원: 현재 데이터를 이 백업으로 교체합니다.\n" +
+                                            "• 덮어쓰기: 현재 데이터로 기존 백업을 지웁니다."
                                 )
                             },
-                            confirmButton = { TextButton({ pendingExisting = null; restoreAuto() }) { Text("복원") } },
-                            dismissButton = { TextButton({ pendingExisting = null; overwriteBackup() }) { Text("덮어쓰기") } }
+                            confirmButton = {
+                                if (unreadable) TextButton({ pendingExisting = null; overwriteBackup() }) { Text("덮어쓰기") }
+                                else TextButton({ pendingExisting = null; restoreAuto() }) { Text("복원") }
+                            },
+                            dismissButton = {
+                                if (unreadable) TextButton({ pendingExisting = null }) { Text("나중에") }
+                                else TextButton({ pendingExisting = null; overwriteBackup() }) { Text("덮어쓰기") }
+                            }
                         )
                     }
                 }
@@ -166,6 +182,11 @@ class MainActivity : ComponentActivity() {
         refreshAll()
         syncBackup()   // 권한 설정 화면에서 돌아왔을 때도 여기서 이어진다
     }
+}
+
+/** Activity를 붙들지 않는 토스트 (앱 범위 코루틴에서 호출해도 안전) */
+private fun toastApp(app: Context, msg: String) {
+    Handler(Looper.getMainLooper()).post { Toast.makeText(app, msg, Toast.LENGTH_LONG).show() }
 }
 
 private val dateSaver = Saver<LocalDate, Long>(save = { it.toEpochDay() }, restore = { LocalDate.ofEpochDay(it) })

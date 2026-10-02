@@ -51,17 +51,16 @@ import java.util.Locale
 // ───────── 공통: 위젯 안의 터치는 Glance 콜백 대신 단순한 브로드캐스트로 처리한다 ─────────
 
 /** 할 일 완료/취소 (done=true 완료). ToggleReceiver가 처리 */
-private fun toggle(ctx: Context, e: Entry, day: Long, done: Boolean = true) = actionSendBroadcast(
-    Intent(ctx, ToggleReceiver::class.java)
-        .setData(Uri.parse("todo://${e.id}/$day/$done"))   // 항목마다 서로 다른 PendingIntent가 되도록
-        .putExtra("id", e.id).putExtra("day", day).putExtra("done", done)
-)
+private fun toggle(ctx: Context, e: Entry, day: Long, done: Boolean = true) = actionSendBroadcast(toggleIntent(ctx, e, day, done))
 
 private const val MONTH_PREF = "month_widget"
 
-/** 월간 위젯에서 선택한 날짜 (이번 달 안일 때만, 아니면 오늘) */
+/** 월간 위젯에서 선택한 날짜 (오늘 고른 이번 달 날짜만, 아니면 오늘) */
 private fun selectedDay(ctx: Context, today: LocalDate): LocalDate {
-    val s = LocalDate.ofEpochDay(ctx.getSharedPreferences(MONTH_PREF, Context.MODE_PRIVATE).getLong("sel", today.toEpochDay()))
+    val p = ctx.getSharedPreferences(MONTH_PREF, Context.MODE_PRIVATE)
+    // 고른 날짜는 그날 하루만 유지: 날짜가 바뀌면 오늘로 돌아간다
+    if (p.getLong("selOn", -1) != today.toEpochDay()) return today
+    val s = LocalDate.ofEpochDay(p.getLong("sel", today.toEpochDay()))
     return if (YearMonth.from(s) == YearMonth.from(today)) s else today
 }
 
@@ -72,7 +71,8 @@ class SelectDayReceiver : BroadcastReceiver() {
         val p = goAsync()
         CoroutineScope(Dispatchers.Default).launch {
             try {
-                c.getSharedPreferences(MONTH_PREF, Context.MODE_PRIVATE).edit().putLong("sel", day).apply()
+                c.getSharedPreferences(MONTH_PREF, Context.MODE_PRIVATE).edit()
+                    .putLong("sel", day).putLong("selOn", LocalDate.now().toEpochDay()).apply()
                 Refresh.updateMonthWidget(c)
             } finally { p.finish() }
         }
@@ -121,8 +121,9 @@ private fun Body(s: Summary) {
 
     // 높이에 맞춰 보여줄 줄 수 계산: 패딩 24 + 제목 24 + 소제목 2개 44
     val capacity = ((LocalSize.current.height.value - 92f) / ROW_H).toInt().coerceAtLeast(2)
-    var ddRows = if (s.dd.isEmpty()) 0 else minOf(s.dd.size, maxOf(1, capacity / 3))
-    var todoRows = minOf(s.items.size, capacity - ddRows)
+    val ddReserve = if (s.dd.isEmpty()) 0 else minOf(s.dd.size, maxOf(1, capacity / 3))
+    var todoRows = minOf(s.items.size, capacity - ddReserve)
+    var ddRows = minOf(s.dd.size, capacity - todoRows)   // 할 일이 적으면 남는 자리는 D-day가 사용
     val todoMore = s.items.size > todoRows
     val ddMore = s.dd.size > ddRows
     if (todoMore) todoRows = maxOf(0, todoRows - 1)   // "… 외 N개" 줄 자리

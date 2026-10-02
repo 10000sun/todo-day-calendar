@@ -25,7 +25,7 @@ object Refresh {
     fun launch(block: suspend () -> Unit) { scope.launch { block() } }
 
     /** 위젯 한 개 갱신이 오래 걸려도(최대 10초) 다른 작업이 영원히 막히지 않도록 */
-    private const val WIDGET_TIMEOUT = 10_000L
+    private const val WIDGET_TIMEOUT = 4_000L
     /** 위젯 갱신끼리는 한 번에 하나씩 */
     private val widgetLock = Mutex()
 
@@ -33,16 +33,20 @@ object Refresh {
         step { withTimeoutOrNull(WIDGET_TIMEOUT) { MonthWidget().updateAll(ctx) } }
     }
 
+    /** 두 위젯은 동시에 갱신 (각각 최대 WIDGET_TIMEOUT, 합쳐서도 그 이상 걸리지 않음 — 수신기 시간 제한 안에 끝나도록) */
     private suspend fun updateWidgets(ctx: Context) = widgetLock.withLock {
-        step { withTimeoutOrNull(WIDGET_TIMEOUT) { TodayWidget().updateAll(ctx) } }
-        step { withTimeoutOrNull(WIDGET_TIMEOUT) { MonthWidget().updateAll(ctx) } }
+        coroutineScope {
+            launch { step { withTimeoutOrNull(WIDGET_TIMEOUT) { TodayWidget().updateAll(ctx) } } }
+            launch { step { withTimeoutOrNull(WIDGET_TIMEOUT) { MonthWidget().updateAll(ctx) } } }
+        }
     }
 
     /**
      * userEdit=true: 사용자가 데이터를 바꾼 경우 — 끝나면 자동 백업 파일도 갱신.
      * 알림/알람/백업과 위젯 갱신은 서로 기다리지 않고 동시에 진행한다 (한쪽이 느려도 다른 쪽이 막히지 않음).
+     * awaitNetwork=true: 기온/공휴일 조회가 끝날 때까지 기다린다 (백그라운드 워커처럼 끝난 뒤 프로세스가 멈출 수 있는 곳에서 사용)
      */
-    suspend fun all(ctx: Context, userEdit: Boolean = false) {
+    suspend fun all(ctx: Context, userEdit: Boolean = false, awaitNetwork: Boolean = false) {
         coroutineScope {
             launch {
                 lock.withLock {
@@ -53,14 +57,19 @@ object Refresh {
             }
             launch { updateWidgets(ctx) }
         }
-        refreshWeather(ctx)
+        val net = refreshWeather(ctx)
+        if (awaitNetwork) net.join()
     }
 
     /** 기온/공휴일 조회는 따로: 느려도 다른 갱신을 막지 않고, 새 값이 있을 때만 화면을 한 번 더 그린다 */
-    private fun refreshWeather(ctx: Context) {
-        scope.launch {
-            val w = Weather.refreshIfStale(ctx)
-            val h = Holidays.refreshIfStale(ctx)
+    private fun refreshWeather(ctx: Context): Job {
+        return scope.launch {
+            // 두 조회는 서로 무관하므로 동시에 (한쪽 네트워크가 느려도 다른 쪽이 기다리지 않도록)
+            val (w, h) = coroutineScope {
+                val dw = async { Weather.refreshIfStale(ctx) }
+                val dh = async { Holidays.refreshIfStale(ctx) }
+                dw.await() to dh.await()
+            }
             if (w || h) coroutineScope {
                 launch { lock.withLock { step { LockNotifier.post(ctx) } } }
                 launch { updateWidgets(ctx) }
@@ -135,15 +144,18 @@ object LockNotifier {
     }
 
     private fun toggle(ctx: Context, e: Entry, day: Long) = PendingIntent.getBroadcast(
-        ctx, e.id.toInt(),
-        Intent(ctx, ToggleReceiver::class.java)
-            .setData(Uri.parse("todo://${e.id}/$day"))
-            .putExtra("id", e.id).putExtra("day", day),
+        ctx, e.id.toInt(), toggleIntent(ctx, e, day),
         PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
     )
 }
 
-/** 알림에서 할 일을 눌렀을 때 완료 처리 */
+/** 알림/위젯에서 할 일을 눌렀을 때 보내는 인텐트 (done=true 완료, false 완료 취소). 두 곳이 같은 형식을 쓰도록 한 곳에서 만든다 */
+fun toggleIntent(ctx: Context, e: Entry, day: Long, done: Boolean = true): Intent =
+    Intent(ctx, ToggleReceiver::class.java)
+        .setData(Uri.parse("todo://${e.id}/$day/$done"))   // 항목/날짜/동작마다 서로 다른 PendingIntent가 되도록
+        .putExtra("id", e.id).putExtra("day", day).putExtra("done", done)
+
+/** 알림/위젯에서 할 일을 눌렀을 때 완료 처리 */
 class ToggleReceiver : BroadcastReceiver() {
     override fun onReceive(c: Context, i: Intent) {
         val id = i.getLongExtra("id", 0L)
@@ -160,7 +172,7 @@ class ToggleReceiver : BroadcastReceiver() {
 
 /** 날짜가 바뀌어도 위젯/알림이 최신이 되도록 15분마다 갱신 */
 class RefreshWorker(c: Context, p: WorkerParameters) : CoroutineWorker(c, p) {
-    override suspend fun doWork(): Result { Refresh.all(applicationContext); return Result.success() }
+    override suspend fun doWork(): Result { Refresh.all(applicationContext, awaitNetwork = true); return Result.success() }
 }
 
 class BootReceiver : BroadcastReceiver() {

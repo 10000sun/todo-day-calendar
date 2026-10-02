@@ -30,14 +30,16 @@ object Weather {
 
     private fun prefs(c: Context) = c.getSharedPreferences("weather", Context.MODE_PRIVATE)
 
-    private fun save(c: Context, l: Location) {
+    /** 좌표가 바뀌어 저장했으면 true */
+    private fun save(c: Context, l: Location): Boolean {
         val p = prefs(c)
         val lat = l.latitude.toString()
         val lon = l.longitude.toString()
         // 같은 좌표면 캐시/재시도 간격을 그대로 둔다 (앱을 열 때마다 네트워크 조회하지 않도록)
-        if (p.getString("lat", null) == lat && p.getString("lon", null) == lon) return
+        if (p.getString("lat", null) == lat && p.getString("lon", null) == lon) return false
         // 위치가 바뀌면 기온도 다음 갱신 때 새로 받도록 캐시 시각을 지운다
         p.edit().putString("lat", lat).putString("lon", lon).remove("at").remove("tried").apply()
+        return true
     }
 
     /** 앱이 화면에 있을 때 호출: 현재(마지막) 위치를 저장하고 끝나면 then 실행 */
@@ -48,16 +50,17 @@ object Weather {
         val last = lm.getProviders(true)
             .mapNotNull { runCatching { lm.getLastKnownLocation(it) }.getOrNull() }
             .maxByOrNull { it.time }
-        if (last != null) { save(ctx, last); then(); return }
+        // 좌표가 그대로면 다시 그릴 이유가 없다 (호출한 쪽이 이미 한 번 갱신을 시작했다)
+        if (last != null) { if (save(ctx, last)) then(); return }
         if (!lm.isProviderEnabled(LocationManager.NETWORK_PROVIDER)) return
         if (Build.VERSION.SDK_INT >= 30) {
             lm.getCurrentLocation(LocationManager.NETWORK_PROVIDER, null, ctx.mainExecutor) { l ->
-                if (l != null) { save(ctx, l); then() }
+                if (l != null && save(ctx, l)) then()
             }
         } else {
             @Suppress("DEPRECATION")
             lm.requestSingleUpdate(LocationManager.NETWORK_PROVIDER, object : LocationListener {
-                override fun onLocationChanged(l: Location) { save(ctx, l); then() }
+                override fun onLocationChanged(l: Location) { if (save(ctx, l)) then() }
                 override fun onStatusChanged(provider: String?, status: Int, extras: Bundle?) {}
                 override fun onProviderEnabled(provider: String) {}
                 override fun onProviderDisabled(provider: String) {}
