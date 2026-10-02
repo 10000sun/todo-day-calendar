@@ -1,12 +1,14 @@
 package com.todocalendar
 
 import android.content.Context
+import android.content.Intent
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.glance.GlanceId
 import androidx.glance.GlanceModifier
+import androidx.glance.LocalContext
 import androidx.glance.action.clickable
 import androidx.glance.appwidget.GlanceAppWidget
 import androidx.glance.appwidget.GlanceAppWidgetReceiver
@@ -48,12 +50,13 @@ class TodayWidget : GlanceAppWidget() {
 @Composable
 private fun Body(today: LocalDate, dd: List<Entry>, items: List<Entry>) {
     val white = ColorProvider(Color.White)
+    val openApp = actionStartActivity(Intent(LocalContext.current, MainActivity::class.java))
     Column(
         GlanceModifier.fillMaxSize()
             .background(ColorProvider(Color(0xE61E1E2E)))
             .cornerRadius(16.dp)
             .padding(12.dp)
-            .clickable(actionStartActivity(MainActivity::class.java))
+            .clickable(openApp)
     ) {
         Text(
             "${today.monthValue}월 ${today.dayOfMonth}일 (${today.dayOfWeek.getDisplayName(DayStyle.SHORT, Locale.KOREAN)})",
@@ -86,12 +89,13 @@ class MonthWidget : GlanceAppWidget() {
 @Composable
 private fun MonthBody(ym: YearMonth, today: LocalDate, marked: Set<Int>, dd: List<Entry>, items: List<Entry>) {
     val white = Color.White
+    val openApp = actionStartActivity(Intent(LocalContext.current, MainActivity::class.java))
     Column(
         GlanceModifier.fillMaxSize()
             .background(ColorProvider(Color(0xE61E1E2E)))
             .cornerRadius(16.dp)
             .padding(8.dp)
-            .clickable(actionStartActivity(MainActivity::class.java))
+            .clickable(openApp)
     ) {
         Text(
             "${ym.year}년 ${ym.monthValue}월",
