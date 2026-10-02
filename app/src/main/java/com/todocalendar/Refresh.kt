@@ -103,6 +103,7 @@ object LockNotifier {
 
         val big = RemoteViews(ctx.packageName, R.layout.notif_big)
         big.setTextViewText(R.id.title, title)
+        big.removeAllViews(R.id.rows)   // 알림 갱신도 기존 화면 위에 덧붙여질 수 있으므로 먼저 비운다
         fun add(layout: Int, text: String, click: PendingIntent? = null) {
             val v = RemoteViews(ctx.packageName, layout)
             v.setTextViewText(R.id.t, text)

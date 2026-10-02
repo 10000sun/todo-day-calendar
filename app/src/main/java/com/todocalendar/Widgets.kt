@@ -194,6 +194,8 @@ object Widgets {
         if (todoMore) todoRows = maxOf(0, todoRows - 1)   // "… 외 N개" 줄 자리
         if (ddMore) ddRows = maxOf(0, ddRows - 1)
 
+        // 갱신은 기존 화면 위에 덧붙여지므로, 줄을 추가하기 전에 이전 줄을 먼저 비운다 (안 그러면 갱신할 때마다 쌓임)
+        v.removeAllViews(R.id.w_rows)
         addHead(ctx, v, R.id.w_rows, if (s.items.isEmpty()) "할 일 없음" else "할 일")
         s.items.take(todoRows).forEach { e ->
             addRow(ctx, v, R.id.w_rows, if (e.isEvent) "◆" else "☐", body(e), WHITE, 13f, if (e.isEvent) null else toggle(ctx, e, s.day), open)
@@ -250,6 +252,7 @@ object Widgets {
 
         val cells = List(m.ym.atDay(1).dayOfWeek.value % 7) { 0 } + (1..m.ym.lengthOfMonth())
         val weeks = cells.chunked(7)
+        v.removeAllViews(R.id.w_grid)   // 이전에 그린 주(週) 줄을 비우고 새로 그린다
         weeks.forEach { week ->
             val row = RemoteViews(ctx.packageName, R.layout.widget_week)
             for (i in 0 until 7) row.addView(R.id.w_week, dayCell(ctx, m, week.getOrElse(i) { 0 }))
@@ -258,9 +261,11 @@ object Widgets {
 
         // 아래 목록: 달력 칸이 최소 28dp는 되도록 남는 높이만큼만 (패딩16 + 제목22 + 요일16 + 날짜 머리글22)
         val listRows = (((heightDp - 54f - 22f - weeks.size * 28f) / ROW_H).toInt()).coerceIn(0, 3)
+        v.removeAllViews(R.id.w_list)
         if (listRows == 0) {
             v.setViewVisibility(R.id.w_list, View.GONE)
         } else {
+            v.setViewVisibility(R.id.w_list, View.VISIBLE)
             val selDay = m.sel.toEpochDay()
             val dow = m.sel.dayOfWeek.getDisplayName(TextStyle.SHORT, Locale.KOREAN)
             addHead(
