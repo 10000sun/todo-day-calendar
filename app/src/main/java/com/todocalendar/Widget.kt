@@ -164,7 +164,9 @@ class MonthWidget : GlanceAppWidget() {
             // 데이터를 못 읽어도 달력 틀은 보여준다
         }
         val temp = Weather.cachedLabel(context)
-        provideContent { MonthBody(ym, today, sel, eventDays, todoDays, items, temp) }
+        val holidayDays = (1..ym.lengthOfMonth()).filter { Holidays.isHoliday(ym.atDay(it)) }.toSet()
+        val selHoliday = Holidays.name(sel)
+        provideContent { MonthBody(ym, today, sel, eventDays, todoDays, items, temp, holidayDays, selHoliday) }
     }
 }
 
@@ -172,7 +174,7 @@ private val EVENT_DOT = Color(0xFFFFB74D)
 private val TODO_DOT = Color(0xFF4FC3F7)
 
 @Composable
-private fun MonthBody(ym: YearMonth, today: LocalDate, sel: LocalDate, eventDays: Set<Int>, todoDays: Set<Int>, items: List<Entry>, temp: String) {
+private fun MonthBody(ym: YearMonth, today: LocalDate, sel: LocalDate, eventDays: Set<Int>, todoDays: Set<Int>, items: List<Entry>, temp: String, holidayDays: Set<Int>, selHoliday: String?) {
     val white = ColorProvider(Color.White)
     val open = actionStartActivity(Intent(LocalContext.current, MainActivity::class.java))
     val selDay = sel.toEpochDay()
@@ -202,13 +204,13 @@ private fun MonthBody(ym: YearMonth, today: LocalDate, sel: LocalDate, eventDays
             Row(GlanceModifier.fillMaxWidth()) {
                 for (i in 0 until 7) {
                     val d = week.getOrElse(i) { 0 }
-                    DayCell(if (d == 0) null else ym.atDay(d), today, sel, d in eventDays, d in todoDays)
+                    DayCell(if (d == 0) null else ym.atDay(d), today, sel, d in eventDays, d in todoDays, d in holidayDays)
                 }
             }
         }
         Text(
             "${sel.monthValue}월 ${sel.dayOfMonth}일 (${sel.dayOfWeek.getDisplayName(DayStyle.SHORT, Locale.KOREAN)})" +
-                if (items.isEmpty()) " · 없음" else "",
+                (selHoliday?.let { " · $it" } ?: "") + if (items.isEmpty()) " · 없음" else "",
             GlanceModifier.fillMaxWidth().padding(top = 6.dp),
             style = TextStyle(color = white, fontSize = 13.sp, fontWeight = FontWeight.Bold)
         )
@@ -227,7 +229,7 @@ private const val MONTH_ROWS = 3
 
 /** 날짜 칸: 선택한 날은 배경색, 오늘은 보라색 글자, 일정은 주황 점 / 할 일은 하늘색 점 */
 @Composable
-private fun RowScope.DayCell(d: LocalDate?, today: LocalDate, sel: LocalDate, hasEvent: Boolean, hasTodo: Boolean) {
+private fun RowScope.DayCell(d: LocalDate?, today: LocalDate, sel: LocalDate, hasEvent: Boolean, hasTodo: Boolean, holiday: Boolean) {
     val cell = GlanceModifier.defaultWeight().height(32.dp).padding(1.dp)
     if (d == null) { Box(cell) {}; return }
     val isSel = d == sel
@@ -235,7 +237,7 @@ private fun RowScope.DayCell(d: LocalDate?, today: LocalDate, sel: LocalDate, ha
     val color = when {
         isSel -> Color.White
         isToday -> Color(0xFFB39DFF)
-        d.dayOfWeek == DayOfWeek.SUNDAY -> Color(0xFFFF8A80)
+        holiday || d.dayOfWeek == DayOfWeek.SUNDAY -> Color(0xFFFF8A80)
         d.dayOfWeek == DayOfWeek.SATURDAY -> Color(0xFF82B1FF)
         else -> Color.White
     }

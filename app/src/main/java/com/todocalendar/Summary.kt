@@ -16,7 +16,7 @@ data class Summary(
     companion object {
         suspend fun load(ctx: Context): Summary {
             val t = LocalDate.now()
-            val head = "${t.monthValue}/${t.dayOfMonth}"
+            val head = "${t.monthValue}/${t.dayOfMonth}" + (Holidays.name(t)?.let { " ($it)" } ?: "")
             return try {
                 val dao = Db.get(ctx).dao()
                 val day = t.toEpochDay()

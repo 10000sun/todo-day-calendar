@@ -40,7 +40,9 @@ object Refresh {
     /** 기온 조회는 잠금 밖에서 따로: 느려도 다른 갱신을 막지 않고, 새 값이 있을 때만 화면을 한 번 더 그린다 */
     private fun refreshWeather(ctx: Context) {
         scope.launch {
-            if (Weather.refreshIfStale(ctx)) lock.withLock {
+            val w = Weather.refreshIfStale(ctx)
+            val h = Holidays.refreshIfStale(ctx)
+            if (w || h) lock.withLock {
                 step { TodayWidget().updateAll(ctx) }
                 step { MonthWidget().updateAll(ctx) }
                 step { LockNotifier.post(ctx) }
@@ -153,6 +155,7 @@ class BootReceiver : BroadcastReceiver() {
 class TodoApp : Application() {
     override fun onCreate() {
         super.onCreate()
+        Holidays.init(this)
         WorkManager.getInstance(this).enqueueUniquePeriodicWork(
             "refresh", ExistingPeriodicWorkPolicy.KEEP,
             PeriodicWorkRequestBuilder<RefreshWorker>(15, TimeUnit.MINUTES).build()

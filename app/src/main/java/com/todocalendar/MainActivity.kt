@@ -221,12 +221,15 @@ fun CalendarScreen(onPickBackup: () -> Unit, onRestore: () -> Unit) {
                     for (i in 0 until 7) {
                         val d = week.getOrNull(i)
                         val day = d?.let { x -> entries.filter { it.occursOn(x.toEpochDay()) } }.orEmpty()
-                        DayCell(d, d == selected, d == today, day.any { it.isEvent }, day.any { !it.isEvent }) { d?.let { selected = it } }
+                        DayCell(d, d == selected, d == today, day.any { it.isEvent }, day.any { !it.isEvent }, d != null && Holidays.isHoliday(d)) { d?.let { selected = it } }
                     }
                 }
             }
             HorizontalDivider(Modifier.padding(vertical = 8.dp))
-            Text("${selected.monthValue}월 ${selected.dayOfMonth}일", style = MaterialTheme.typography.titleMedium)
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("${selected.monthValue}월 ${selected.dayOfMonth}일", style = MaterialTheme.typography.titleMedium)
+                Holidays.name(selected)?.let { Text(it, color = Color(0xFFE53935), style = MaterialTheme.typography.labelLarge) }
+            }
             val sel = selected.toEpochDay()
             val list = dayEntries.filter { it.occursOn(sel) }.sortedWith(dayOrder(sel))
             LazyColumn(Modifier.weight(1f)) {
@@ -259,7 +262,7 @@ fun CalendarScreen(onPickBackup: () -> Unit, onRestore: () -> Unit) {
 }
 
 @Composable
-private fun RowScope.DayCell(d: LocalDate?, sel: Boolean, isToday: Boolean, hasEvent: Boolean, hasTodo: Boolean, onClick: () -> Unit) {
+private fun RowScope.DayCell(d: LocalDate?, sel: Boolean, isToday: Boolean, hasEvent: Boolean, hasTodo: Boolean, holiday: Boolean, onClick: () -> Unit) {
     Box(
         Modifier.weight(1f).height(52.dp).padding(2.dp).clip(RoundedCornerShape(8.dp))
             .background(if (sel) MaterialTheme.colorScheme.primaryContainer else Color.Transparent)
@@ -271,7 +274,7 @@ private fun RowScope.DayCell(d: LocalDate?, sel: Boolean, isToday: Boolean, hasE
                 d.dayOfMonth.toString(),
                 color = when {
                     isToday -> MaterialTheme.colorScheme.primary
-                    d.dayOfWeek == DayOfWeek.SUNDAY -> Color(0xFFE53935)
+                    holiday || d.dayOfWeek == DayOfWeek.SUNDAY -> Color(0xFFE53935)
                     d.dayOfWeek == DayOfWeek.SATURDAY -> Color(0xFF1E88E5)
                     else -> MaterialTheme.colorScheme.onSurface
                 },
