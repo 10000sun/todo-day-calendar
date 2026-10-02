@@ -2,8 +2,12 @@ package com.todocalendar
 
 import android.content.Context
 import androidx.room.*
+import androidx.room.migration.Migration
+import androidx.room.withTransaction
+import androidx.sqlite.db.SupportSQLiteDatabase
 import kotlinx.coroutines.flow.Flow
 import java.time.LocalDate
+import java.time.YearMonth
 
 enum class Repeat(val label: String) { NONE("반복 없음"), DAILY("매일"), WEEKLY("매주"), MONTHLY("매월"), YEARLY("매년") }
 
@@ -42,19 +46,39 @@ interface EntryDao {
     @Query("SELECT * FROM Entry WHERE remind = 1 AND timeMin >= 0")
     suspend fun reminders(): List<Entry>
 
+    @Query("SELECT * FROM Entry WHERE id = :id")
+    suspend fun get(id: Long): Entry?
+
     @Insert suspend fun add(e: Entry)
     @Update suspend fun update(e: Entry)
     @Delete suspend fun delete(e: Entry)
 }
 
-@Database(entities = [Entry::class], version = 1, exportSchema = false)
+@Database(entities = [Entry::class], version = 2, exportSchema = false)
 abstract class Db : RoomDatabase() {
     abstract fun dao(): EntryDao
 
     companion object {
+        /** v1(done 컬럼)에서 v2로: 완료 표시를 doneDates로 옮기고 새 컬럼 추가 */
+        private val MIGRATION_1_2 = object : Migration(1, 2) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    "CREATE TABLE Entry_new (id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, date INTEGER NOT NULL, " +
+                        "title TEXT NOT NULL, isEvent INTEGER NOT NULL, dday INTEGER NOT NULL, repeat TEXT NOT NULL, " +
+                        "timeMin INTEGER NOT NULL, remind INTEGER NOT NULL, doneDates TEXT NOT NULL)"
+                )
+                db.execSQL(
+                    "INSERT INTO Entry_new (id, date, title, isEvent, dday, repeat, timeMin, remind, doneDates) " +
+                        "SELECT id, date, title, isEvent, dday, 'NONE', -1, 0, CASE WHEN done = 1 THEN CAST(date AS TEXT) ELSE '' END FROM Entry"
+                )
+                db.execSQL("DROP TABLE Entry")
+                db.execSQL("ALTER TABLE Entry_new RENAME TO Entry")
+            }
+        }
+
         @Volatile private var inst: Db? = null
         fun get(c: Context): Db = inst ?: synchronized(this) {
-            inst ?: Room.databaseBuilder(c.applicationContext, Db::class.java, "cal.db").build().also { inst = it }
+            inst ?: Room.databaseBuilder(c.applicationContext, Db::class.java, "cal.db").addMigrations(MIGRATION_1_2).build().also { inst = it }
         }
     }
 }
@@ -74,12 +98,19 @@ fun Entry.occursOn(day: Long): Boolean {
     }
 }
 
-/** from 이후(포함) 첫 발생일. 지난 단발 일정은 null */
+/** from 이후(포함) 첫 발생일(상수 시간). 지난 단발 일정은 null */
 fun Entry.nextOn(from: Long): Long? {
     val start = maxOf(from, date)
-    if (repeat == Repeat.NONE) return if (start == date) date else null
-    for (i in 0 until 1500) if (occursOn(start + i)) return start + i
-    return null
+    val s = LocalDate.ofEpochDay(date)
+    val f = LocalDate.ofEpochDay(start)
+    fun inMonth(ym: YearMonth) = ym.atDay(minOf(s.dayOfMonth, ym.lengthOfMonth())).toEpochDay()
+    return when (repeat) {
+        Repeat.NONE -> if (start == date) date else null
+        Repeat.DAILY -> start
+        Repeat.WEEKLY -> start + (7 - (start - date) % 7) % 7
+        Repeat.MONTHLY -> (0L..1L).map { inMonth(YearMonth.from(f).plusMonths(it)) }.first { it >= start }
+        Repeat.YEARLY -> (0..1).map { inMonth(YearMonth.of(f.year + it, s.month)) }.first { it >= start }
+    }
 }
 
 fun Entry.isDone(day: Long) = day.toString() in doneDates.split(',')
@@ -108,8 +139,17 @@ fun ddayLabel(e: Entry, today: LocalDate = LocalDate.now()): String {
 fun line(e: Entry, day: Long) =
     (if (e.isEvent) "◆ " else if (e.isDone(day)) "☑ " else "☐ ") + (if (e.timeMin >= 0) e.timeText() + " " else "") + e.title
 
-/** 앞으로 다가오는(또는 오늘) D-day만, 가까운 순 */
+/** 앞으로 다가오는(또는 오늘) D-day만, 가까운 순. 다음 발생일은 항목당 한 번만 계산 */
 fun upcoming(all: List<Entry>, today: LocalDate = LocalDate.now()): List<Entry> {
     val t = today.toEpochDay()
-    return all.filter { it.nextOn(t) != null }.sortedBy { it.nextOn(t) }
+    return all.mapNotNull { e -> e.nextOn(t)?.let { e to it } }.sortedBy { it.second }.map { it.first }
+}
+
+/** 체크/저장은 DB의 최신 값을 읽어 합쳐서 쓴다 (이전에 캡처한 값으로 덮어쓰지 않도록) */
+suspend fun Db.setDone(id: Long, day: Long, v: Boolean) = withTransaction {
+    dao().get(id)?.let { dao().update(it.withDone(day, v)) }
+}
+
+suspend fun Db.save(e: Entry) = withTransaction {
+    if (e.id == 0L) dao().add(e) else dao().update(e.copy(doneDates = dao().get(e.id)?.doneDates ?: e.doneDates))
 }

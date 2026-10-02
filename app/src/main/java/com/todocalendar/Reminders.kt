@@ -10,13 +10,14 @@ import java.time.*
 /** 시간 지정 알림: 다음 알림 시각 하나만 알람으로 걸고, 울릴 때 다음 것을 다시 건다. */
 object Reminders {
     private const val CH = "reminder"
-    private const val MIN10 = 10 * 60_000L
+    /** 이 시간 안에 지난 알림만 늦게라도 발송 (Doze 지연 대비) */
+    private const val MAX_LATE = 60 * 60_000L
 
     private fun at(e: Entry, day: Long) =
         LocalDateTime.of(LocalDate.ofEpochDay(day), LocalTime.of(e.timeMin / 60, e.timeMin % 60))
             .atZone(ZoneId.systemDefault()).toInstant().toEpochMilli()
 
-    suspend fun run(ctx: Context) {
+    suspend fun run(ctx: Context, fire: Boolean = true) {
         val list = Db.get(ctx).dao().reminders()
         val now = System.currentTimeMillis()
         val prefs = ctx.getSharedPreferences("rem", Context.MODE_PRIVATE)
@@ -24,10 +25,10 @@ object Reminders {
         val today = LocalDate.now().toEpochDay()
 
         // 마지막 실행 이후 도래한 알림 발송 (너무 오래된 것은 무시)
-        for (e in list) for (day in today - 1..today) {
+        if (fire) for (e in list) for (day in today - 1..today) {
             if (!e.occursOn(day) || e.isDone(day)) continue
             val t = at(e, day)
-            if (t > last && t <= now && now - t < MIN10) notify(ctx, e)
+            if (t > last && t <= now && now - t < MAX_LATE) notify(ctx, e)
         }
         prefs.edit().putLong("last", now).apply()
 

@@ -2,6 +2,7 @@ package com.todocalendar
 
 import android.app.*
 import android.content.*
+import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.glance.appwidget.updateAll
 import androidx.work.*
@@ -14,11 +15,20 @@ object Refresh {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     fun fire(ctx: Context) { scope.launch { all(ctx) } }
 
-    suspend fun all(ctx: Context) {
-        TodayWidget().updateAll(ctx)
-        MonthWidget().updateAll(ctx)
-        LockNotifier.post(ctx)
-        Reminders.run(ctx)
+    /** 화면(컴포지션)이 사라져도 취소되지 않도록 앱 범위에서 실행 */
+    fun launch(block: suspend () -> Unit) { scope.launch { block() } }
+
+    /** fire=false: 사용자가 방금 직접 수정한 경우 — 이미 지난 알림 시각은 울리지 않고 건너뜀 */
+    suspend fun all(ctx: Context, fire: Boolean = true) {
+        step { TodayWidget().updateAll(ctx) }
+        step { MonthWidget().updateAll(ctx) }
+        step { LockNotifier.post(ctx) }
+        step { Reminders.run(ctx, fire) }
+    }
+
+    /** 한 단계가 실패해도 나머지(특히 알람 재예약)는 계속 진행 */
+    private suspend fun step(b: suspend () -> Unit) {
+        try { b() } catch (e: CancellationException) { throw e } catch (e: Exception) { Log.w("Refresh", e) }
     }
 }
 

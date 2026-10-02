@@ -29,7 +29,6 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.unit.dp
-import kotlinx.coroutines.launch
 import java.time.DayOfWeek
 import java.time.LocalDate
 import java.time.YearMonth
@@ -51,29 +50,35 @@ class MainActivity : ComponentActivity() {
 @Composable
 fun CalendarScreen() {
     val ctx = LocalContext.current
-    val dao = remember { Db.get(ctx).dao() }
-    val scope = rememberCoroutineScope()
+    val db = remember { Db.get(ctx) }
+    val entryDao = remember { db.dao() }
     val today = LocalDate.now()
     var month by remember { mutableStateOf(YearMonth.from(today)) }
     var selected by remember { mutableStateOf(today) }
     var adding by remember { mutableStateOf(false) }
     var editing by remember { mutableStateOf<Entry?>(null) }
-    val entries by remember(month) { dao.visible(month.atDay(1).toEpochDay(), month.atEndOfMonth().toEpochDay()) }
+    val entries by remember(month) { entryDao.visible(month.atDay(1).toEpochDay(), month.atEndOfMonth().toEpochDay()) }
         .collectAsState(emptyList())
-    val ddays by remember { dao.ddays() }.collectAsState(emptyList())
+    val ddays by remember { entryDao.ddays() }.collectAsState(emptyList())
 
-    fun write(block: suspend EntryDao.() -> Unit) { scope.launch { dao.block(); Refresh.all(ctx) } }
+    val dayEntries by remember(selected) { entryDao.visible(selected.toEpochDay(), selected.toEpochDay()) }
+        .collectAsState(emptyList())
+    val soon = remember(ddays, today) { upcoming(ddays, today) }
+
+    fun write(block: suspend Db.() -> Unit) {
+        val app = ctx.applicationContext
+        Refresh.launch { db.block(); Refresh.all(app, fire = false) }
+    }
 
     Scaffold(
         floatingActionButton = { FloatingActionButton(onClick = { adding = true }) { Text("＋") } }
     ) { pad ->
         Column(Modifier.padding(pad).padding(horizontal = 12.dp)) {
-            val soon = upcoming(ddays, today)
             if (soon.isNotEmpty()) {
                 LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     items(soon, key = { it.id }) { e ->
                         AssistChip(
-                            onClick = { selected = LocalDate.ofEpochDay(e.date); month = YearMonth.from(selected) },
+                            onClick = { selected = LocalDate.ofEpochDay(e.nextOn(today.toEpochDay()) ?: e.date); month = YearMonth.from(selected) },
                             label = { Text(ddayLabel(e, today)) }
                         )
                     }
@@ -105,13 +110,13 @@ fun CalendarScreen() {
             HorizontalDivider(Modifier.padding(vertical = 8.dp))
             Text("${selected.monthValue}월 ${selected.dayOfMonth}일", style = MaterialTheme.typography.titleMedium)
             val sel = selected.toEpochDay()
-            val list = entries.filter { it.occursOn(sel) }.sortedWith(dayOrder(sel))
+            val list = dayEntries.filter { it.occursOn(sel) }.sortedWith(dayOrder(sel))
             LazyColumn(Modifier.weight(1f)) {
                 items(list, key = { it.id }) { e ->
                     val done = e.isDone(sel)
                     Row(Modifier.fillMaxWidth().clickable { editing = e }, verticalAlignment = Alignment.CenterVertically) {
                         if (e.isEvent) Text("◆", Modifier.padding(horizontal = 12.dp), color = MaterialTheme.colorScheme.primary)
-                        else Checkbox(done, { c -> write { update(e.withDone(sel, c)) } })
+                        else Checkbox(done, { c -> write { setDone(e.id, sel, c) } })
                         Column(Modifier.weight(1f)) {
                             Text(e.title, textDecoration = if (done) TextDecoration.LineThrough else null)
                             val sub = listOfNotNull(
@@ -120,7 +125,7 @@ fun CalendarScreen() {
                             ).joinToString(" · ")
                             if (sub.isNotEmpty()) Text(sub, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.outline)
                         }
-                        TextButton({ write { delete(e) } }) { Text("삭제") }
+                        TextButton({ write { dao().delete(e) } }) { Text("삭제") }
                     }
                 }
             }
@@ -129,7 +134,7 @@ fun CalendarScreen() {
 
     if (adding || editing != null) {
         val close = { adding = false; editing = null }
-        EntryDialog(editing, selected, close) { e -> write { if (e.id == 0L) add(e) else update(e) }; close() }
+        EntryDialog(editing, selected, close) { e -> write { save(e) }; close() }
     }
 }
 
