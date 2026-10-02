@@ -53,7 +53,7 @@ private fun Body(today: LocalDate, dd: List<Entry>, items: List<Entry>) {
             .background(ColorProvider(Color(0xE61E1E2E)))
             .cornerRadius(16.dp)
             .padding(12.dp)
-            .clickable(actionStartActivity<MainActivity>())
+            .clickable(actionStartActivity(MainActivity::class.java))
     ) {
         Text(
             "${today.monthValue}월 ${today.dayOfMonth}일 (${today.dayOfWeek.getDisplayName(DayStyle.SHORT, Locale.KOREAN)})",
@@ -91,7 +91,7 @@ private fun MonthBody(ym: YearMonth, today: LocalDate, marked: Set<Int>, dd: Lis
             .background(ColorProvider(Color(0xE61E1E2E)))
             .cornerRadius(16.dp)
             .padding(8.dp)
-            .clickable(actionStartActivity<MainActivity>())
+            .clickable(actionStartActivity(MainActivity::class.java))
     ) {
         Text(
             "${ym.year}년 ${ym.monthValue}월",
