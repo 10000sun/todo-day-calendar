@@ -88,7 +88,11 @@ class MainActivity : ComponentActivity() {
         Refresh.launch {
             // 이미 백업이 들어 있는 파일이면 덮어쓰기 전에 사용자에게 먼저 묻는다
             val n = Backup.peek(app, uri)
-            if (n != null && n > 0) runOnUiThread { pendingExisting = uri to n } else writeTarget(uri)
+            when {
+                n == Backup.NOT_BACKUP -> toast("백업이 아닌 내용이 들어 있는 파일입니다. 다른 파일(또는 새 파일)을 선택해 주세요")
+                n != null && n > 0 -> runOnUiThread { pendingExisting = uri to n }
+                else -> writeTarget(uri)
+            }
         }
     }
 
@@ -121,7 +125,7 @@ class MainActivity : ComponentActivity() {
             if (Build.VERSION.SDK_INT >= 33) add(Manifest.permission.POST_NOTIFICATIONS)
             add(Manifest.permission.ACCESS_COARSE_LOCATION)
         }.filter { checkSelfPermission(it) != PackageManager.PERMISSION_GRANTED }
-        if (need.isNotEmpty()) askPerms.launch(need.toTypedArray())
+        if (need.isNotEmpty() && savedInstanceState == null) askPerms.launch(need.toTypedArray())
         setContent {
             MaterialTheme(colorScheme = if (isSystemInDarkTheme()) darkColorScheme() else lightColorScheme()) {
                 Surface(Modifier.fillMaxSize()) {

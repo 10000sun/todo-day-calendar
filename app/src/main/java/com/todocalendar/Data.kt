@@ -157,7 +157,8 @@ fun upcomingDates(all: List<Entry>, today: LocalDate = LocalDate.now()): List<Pa
     return all.mapNotNull { e ->
         val next = e.nextOn(t)
         when {
-            next != null -> if (!e.isEvent && e.isDone(next)) null else e to next
+            // 이번 회차를 완료한 반복 할 일은 다음 회차를 보여준다 (단발이면 null)
+            next != null -> if (!e.isEvent && e.isDone(next)) e.nextOn(next + 1)?.let { e to it } else e to next
             !e.isEvent && !e.isDone(e.date) -> e to e.date   // 지났는데 안 끝낸 할 일
             else -> null
         }

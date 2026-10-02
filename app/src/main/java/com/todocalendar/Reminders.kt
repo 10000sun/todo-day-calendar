@@ -5,6 +5,8 @@ import android.content.*
 import android.os.Build
 import androidx.core.app.NotificationCompat
 import kotlinx.coroutines.*
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import java.time.*
 
 /** 시간 지정 알림: 다음 알림 시각 하나만 알람으로 걸고, 울릴 때 다음 것을 다시 건다. */
@@ -19,7 +21,12 @@ object Reminders {
         LocalDateTime.of(LocalDate.ofEpochDay(day), LocalTime.of(e.timeMin / 60, e.timeMin % 60))
             .atZone(ZoneId.systemDefault()).toInstant().toEpochMilli()
 
-    suspend fun run(ctx: Context) {
+    /** 알람 수신(ReminderReceiver)과 Refresh가 동시에 돌아 같은 알림을 두 번 보내지 않도록 */
+    private val runLock = Mutex()
+
+    suspend fun run(ctx: Context) = runLock.withLock { runLocked(ctx) }
+
+    private suspend fun runLocked(ctx: Context) {
         val list = Db.get(ctx).dao().reminders()
         val now = System.currentTimeMillis()
         val prefs = ctx.getSharedPreferences("rem", Context.MODE_PRIVATE)

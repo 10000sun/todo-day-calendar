@@ -28,10 +28,11 @@ object Refresh {
     suspend fun all(ctx: Context, userEdit: Boolean = false) = lock.withLock {
         // 알람 재예약을 가장 먼저: 아래 단계(기온 조회 등 네트워크)가 느려도 알람은 보장
         step { Reminders.run(ctx) }
+        // 백업은 기온 조회(네트워크, 최대 수십 초)보다 먼저: 느리거나 goAsync 시간 초과/프로세스 종료로 변경분이 백업에서 빠지지 않도록
+        if (userEdit) step { Backup.autoWrite(ctx) }
         step { LockNotifier.post(ctx) }
         step { TodayWidget().updateAll(ctx) }
         step { MonthWidget().updateAll(ctx) }
-        if (userEdit) step { Backup.autoWrite(ctx) }
     }
 
     /** 한 단계가 실패해도 나머지(특히 알람 재예약)는 계속 진행 */

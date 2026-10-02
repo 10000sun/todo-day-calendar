@@ -118,6 +118,8 @@ class MonthWidget : GlanceAppWidget() {
             val day = today.toEpochDay()
             items = dao.onDay(day).filter { it.isEvent || !it.isDone(day) }
             dd = upcoming(dao.ddayList(), today).take(1)
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
         } catch (e: Exception) {
             // 데이터를 못 읽어도 달력 틀은 보여준다
         }

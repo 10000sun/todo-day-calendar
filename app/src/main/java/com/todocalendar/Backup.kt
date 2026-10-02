@@ -4,6 +4,8 @@ import android.content.Context
 import android.net.Uri
 import androidx.room.withTransaction
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
@@ -15,6 +17,8 @@ import org.json.JSONObject
 object Backup {
     private const val PREF = "backup"
     private const val KEY = "uri"
+    /** 자동 백업/지정/복원 후 재저장이 같은 파일을 동시에 "wt"로 열어 내용이 뒤섞이지 않도록 */
+    private val writeLock = Mutex()
 
     private fun prefs(c: Context) = c.getSharedPreferences(PREF, Context.MODE_PRIVATE)
 
@@ -28,11 +32,14 @@ object Backup {
         return granted && prefs(c).getBoolean("ok", true)
     }
 
-    /** 파일에 이미 들어 있는 백업의 항목 수. 비었거나 백업 파일이 아니면 null */
+    /** 백업이 아닌 내용이 들어 있는 파일 */
+    const val NOT_BACKUP = -1
+
+    /** 파일에 이미 들어 있는 백업의 항목 수. 빈 파일이면 null, 백업이 아닌 내용이면 NOT_BACKUP */
     suspend fun peek(ctx: Context, uri: Uri): Int? = withContext(Dispatchers.IO) {
         try {
             ctx.contentResolver.openInputStream(uri)?.bufferedReader()?.use { it.readText() }
-                ?.takeIf { it.isNotBlank() }?.let { fromJson(it).size }
+                ?.takeIf { it.isNotBlank() }?.let { runCatching { fromJson(it).size }.getOrDefault(NOT_BACKUP) }
         } catch (e: Exception) { null }
     }
 
@@ -54,22 +61,26 @@ object Backup {
         val arr = root.getJSONArray("entries")
         return (0 until arr.length()).map {
             val o = arr.getJSONObject(it)
+            // 손으로 고친/깨진 파일의 범위 밖 시각이 알림 예약(LocalTime.of)을 영구히 실패시키지 않도록 보정
+            val timeMin = o.getInt("timeMin").let { t -> if (t in 0..1439) t else -1 }
             Entry(
                 id = o.getLong("id"), date = o.getLong("date"), title = o.getString("title"),
                 isEvent = o.getBoolean("isEvent"), dday = o.getBoolean("dday"),
                 repeat = runCatching { Repeat.valueOf(o.getString("repeat")) }.getOrDefault(Repeat.NONE),
-                timeMin = o.getInt("timeMin"), remind = o.getBoolean("remind"), doneDates = o.optString("doneDates", ""),
+                timeMin = timeMin, remind = o.getBoolean("remind") && timeMin >= 0, doneDates = o.optString("doneDates", ""),
             )
         }
     }
 
     /** 지정한 파일에 현재 데이터 저장 (성공 여부 반환) */
-    suspend fun write(ctx: Context, uri: Uri): Boolean = withContext(Dispatchers.IO) {
-        try {
-            val text = toJson(Db.get(ctx).dao().all())
-            ctx.contentResolver.openOutputStream(uri, "wt")!!.use { it.write(text.toByteArray()) }
-            true
-        } catch (e: Exception) { false }
+    suspend fun write(ctx: Context, uri: Uri): Boolean = writeLock.withLock {
+        withContext(Dispatchers.IO) {
+            try {
+                val text = toJson(Db.get(ctx).dao().all())
+                ctx.contentResolver.openOutputStream(uri, "wt")!!.use { it.write(text.toByteArray()) }
+                true
+            } catch (e: Exception) { false }
+        }
     }
 
     /** 자동 백업이 켜져 있으면 갱신 (실패해도 앱 동작에는 영향 없음) */

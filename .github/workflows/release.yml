@@ -14,10 +14,15 @@ jobs:
         with: { distribution: temurin, java-version: 17 }
       - uses: gradle/actions/setup-gradle@v4
         with: { gradle-version: "8.9" }
-      - run: gradle :app:assembleRelease --no-daemon
+      - name: Build release APK
+        env:
+          TAG: ${{ github.ref_name }}
+          VERSION_CODE: ${{ github.run_number }}
+        run: VERSION_NAME="${TAG#v}" gradle :app:assembleRelease --no-daemon
       - name: Create release
         env:
           GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
         run: |
-          cp app/build/outputs/apk/release/app-release.apk todo-day-calendar-${{ github.ref_name }}.apk
-          gh release create "${{ github.ref_name }}" todo-day-calendar-${{ github.ref_name }}.apk --title "${{ github.ref_name }}" --generate-notes
+          cp app/build/outputs/apk/release/app-release.apk "todo-day-calendar-$TAG.apk"
+          gh release create "$TAG" "todo-day-calendar-$TAG.apk" --title "$TAG" --generate-notes
