@@ -25,14 +25,27 @@ object Refresh {
     fun launch(block: suspend () -> Unit) { scope.launch { block() } }
 
     /** userEdit=true: 사용자가 데이터를 바꾼 경우 — 끝나면 자동 백업 파일도 갱신 */
-    suspend fun all(ctx: Context, userEdit: Boolean = false) = lock.withLock {
-        // 알람 재예약을 가장 먼저: 아래 단계(기온 조회 등 네트워크)가 느려도 알람은 보장
-        step { Reminders.run(ctx) }
-        // 백업은 기온 조회(네트워크, 최대 수십 초)보다 먼저: 느리거나 goAsync 시간 초과/프로세스 종료로 변경분이 백업에서 빠지지 않도록
-        if (userEdit) step { Backup.autoWrite(ctx) }
-        step { LockNotifier.post(ctx) }
-        step { TodayWidget().updateAll(ctx) }
-        step { MonthWidget().updateAll(ctx) }
+    suspend fun all(ctx: Context, userEdit: Boolean = false) {
+        lock.withLock {
+            // 위젯/알림은 저장된 기온으로 즉시 그린다 (네트워크를 기다리지 않아 삭제·수정이 바로 반영됨)
+            step { TodayWidget().updateAll(ctx) }
+            step { MonthWidget().updateAll(ctx) }
+            step { LockNotifier.post(ctx) }
+            step { Reminders.run(ctx) }
+            if (userEdit) step { Backup.autoWrite(ctx) }
+        }
+        refreshWeather(ctx)
+    }
+
+    /** 기온 조회는 잠금 밖에서 따로: 느려도 다른 갱신을 막지 않고, 새 값이 있을 때만 화면을 한 번 더 그린다 */
+    private fun refreshWeather(ctx: Context) {
+        scope.launch {
+            if (Weather.refreshIfStale(ctx)) lock.withLock {
+                step { TodayWidget().updateAll(ctx) }
+                step { MonthWidget().updateAll(ctx) }
+                step { LockNotifier.post(ctx) }
+            }
+        }
     }
 
     /** 한 단계가 실패해도 나머지(특히 알람 재예약)는 계속 진행 */

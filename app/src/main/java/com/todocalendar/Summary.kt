@@ -21,7 +21,7 @@ data class Summary(
                 val dao = Db.get(ctx).dao()
                 val day = t.toEpochDay()
                 Summary(
-                    t, "$head - ${Weather.label(ctx)}",
+                    t, "$head - ${Weather.cachedLabel(ctx)}",
                     dao.onDay(day).filter { it.isEvent || !it.isDone(day) },
                     upcomingDates(dao.ddayList(), t)
                 )

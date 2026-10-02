@@ -72,7 +72,15 @@ object Weather {
      * "18°C" 형태. 저장된 위치가 없으면 IP 기반 대략적 위치로 대신 조회한다.
      * 네트워크 실패 시 이전 캐시, 그것도 없으면 null
      */
-    suspend fun tempText(ctx: Context): String? = withContext(Dispatchers.IO) { lock.withLock { fetch(ctx) } }
+    private suspend fun tempText(ctx: Context): String? = withContext(Dispatchers.IO) { lock.withLock { fetch(ctx) } }
+
+    /** 필요하면 네트워크로 기온을 새로 받아 저장. 새 값이 저장됐으면 true (화면 갱신 필요) */
+    suspend fun refreshIfStale(ctx: Context): Boolean {
+        val p = prefs(ctx)
+        val before = p.getLong("at", 0)
+        tempText(ctx)
+        return p.getLong("at", 0) != before
+    }
 
     private fun fetch(ctx: Context): String? {
         val p = prefs(ctx)
@@ -110,9 +118,15 @@ object Weather {
         try { return JSONObject(conn.inputStream.bufferedReader().readText()) } finally { conn.disconnect() }
     }
 
-    /** 제목용: 기온, 못 가져오면 이유 */
-    suspend fun label(ctx: Context): String =
-        tempText(ctx) ?: if (hasLocationPermission(ctx)) "기온 확인 불가" else "위치 권한 필요"
+    /** 제목용: 저장된 기온만 즉시 반환(네트워크 대기 없음). 새 기온은 refreshIfStale 이후 화면에 반영된다 */
+    fun cachedLabel(ctx: Context): String {
+        val p = prefs(ctx)
+        return when {
+            p.contains("temp") -> fmt(p.getFloat("temp", 0f))
+            p.getLong("tried", 0) > 0 -> "기온 확인 불가"
+            else -> "기온 확인 중"
+        }
+    }
 
     private fun fmt(t: Float) = "${Math.round(t)}°C"
 }
