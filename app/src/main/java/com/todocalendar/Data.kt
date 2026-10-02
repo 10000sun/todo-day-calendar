@@ -139,11 +139,14 @@ fun ddayLabel(e: Entry, today: LocalDate = LocalDate.now()): String {
 fun line(e: Entry, day: Long) =
     (if (e.isEvent) "◆ " else if (e.isDone(day)) "☑ " else "☐ ") + (if (e.timeMin >= 0) e.timeText() + " " else "") + e.title
 
-/** 앞으로 다가오는(또는 오늘) D-day만, 가까운 순. 다음 발생일은 항목당 한 번만 계산 */
-fun upcoming(all: List<Entry>, today: LocalDate = LocalDate.now()): List<Entry> {
+/** 앞으로 다가오는(또는 오늘) D-day와 그 날짜, 가까운 순. 완료한 할 일은 제외 (일정은 항상 표시) */
+fun upcomingDates(all: List<Entry>, today: LocalDate = LocalDate.now()): List<Pair<Entry, Long>> {
     val t = today.toEpochDay()
-    return all.mapNotNull { e -> e.nextOn(t)?.let { e to it } }.sortedBy { it.second }.map { it.first }
+    return all.mapNotNull { e -> e.nextOn(t)?.takeUnless { !e.isEvent && e.isDone(it) }?.let { e to it } }
+        .sortedBy { it.second }
 }
+
+fun upcoming(all: List<Entry>, today: LocalDate = LocalDate.now()): List<Entry> = upcomingDates(all, today).map { it.first }
 
 /** 체크/저장은 DB의 최신 값을 읽어 합쳐서 쓴다 (이전에 캡처한 값으로 덮어쓰지 않도록) */
 suspend fun Db.setDone(id: Long, day: Long, v: Boolean) = withTransaction {

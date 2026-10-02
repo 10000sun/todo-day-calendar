@@ -55,7 +55,7 @@ object LockNotifier {
         val day = t.toEpochDay()
         // 완료한 할 일은 알림에서 사라진다
         val items = dao.onDay(day).filter { it.isEvent || !it.isDone(day) }
-        val dd = upcoming(dao.ddayList(), t).take(MAX_DDAY)
+        val dd = upcomingDates(dao.ddayList(), t).take(MAX_DDAY)
         val title = "${t.monthValue}/${t.dayOfMonth}" + (Weather.tempText(ctx)?.let { " - $it" } ?: "")
 
         val big = RemoteViews(ctx.packageName, R.layout.notif_big)
@@ -72,7 +72,10 @@ object LockNotifier {
         if (items.size > MAX_TODO) add(R.layout.notif_row, "… 외 ${items.size - MAX_TODO}개")
         add(R.layout.notif_head, "D-day")
         if (dd.isEmpty()) add(R.layout.notif_row, "없음")
-        dd.forEach { add(R.layout.notif_row, ddayLabel(it, t)) }
+        // D-day로 지정한 할 일도 줄을 눌러 완료 (해당 D-day 날짜 기준)
+        dd.forEach { (e, d) ->
+            add(R.layout.notif_row, (if (e.isEvent) "" else "☐ ") + ddayLabel(e, t), if (e.isEvent) null else toggle(ctx, e, d))
+        }
 
         val open = PendingIntent.getActivity(
             ctx, 0, Intent(ctx, MainActivity::class.java),
@@ -82,7 +85,7 @@ object LockNotifier {
         val n = NotificationCompat.Builder(ctx, CH)
             .setSmallIcon(android.R.drawable.ic_menu_my_calendar)
             .setContentTitle(title)
-            .setContentText("할 일 ${if (todoCount == 0) "없음" else "${todoCount}개"}" + (dd.firstOrNull()?.let { " · " + ddayLabel(it, t) } ?: ""))
+            .setContentText("할 일 ${if (todoCount == 0) "없음" else "${todoCount}개"}" + (dd.firstOrNull()?.let { " · " + ddayLabel(it.first, t) } ?: ""))
             .setStyle(NotificationCompat.DecoratedCustomViewStyle())
             .setCustomBigContentView(big)
             .setOngoing(true)
