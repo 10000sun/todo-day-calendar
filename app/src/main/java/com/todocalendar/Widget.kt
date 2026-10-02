@@ -54,7 +54,7 @@ class ToggleAction : ActionCallback {
         val id = parameters[KEY_ID] ?: return
         val day = parameters[KEY_DAY] ?: return
         Db.get(context).setDone(id, day, true)
-        Refresh.all(context, fire = false)
+        Refresh.all(context, userEdit = true)
     }
 }
 

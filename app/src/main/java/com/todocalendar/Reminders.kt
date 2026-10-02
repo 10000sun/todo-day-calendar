@@ -13,24 +13,28 @@ object Reminders {
     /** 이 시간 안에 지난 알림만 늦게라도 발송 (Doze 지연 대비) */
     private const val MAX_LATE = 60 * 60_000L
 
+    private fun sig(e: Entry) = "${e.id}|${e.date}|${e.timeMin}|${e.repeat}"
+
     private fun at(e: Entry, day: Long) =
         LocalDateTime.of(LocalDate.ofEpochDay(day), LocalTime.of(e.timeMin / 60, e.timeMin % 60))
             .atZone(ZoneId.systemDefault()).toInstant().toEpochMilli()
 
-    suspend fun run(ctx: Context, fire: Boolean = true) {
+    suspend fun run(ctx: Context) {
         val list = Db.get(ctx).dao().reminders()
         val now = System.currentTimeMillis()
         val prefs = ctx.getSharedPreferences("rem", Context.MODE_PRIVATE)
         val last = maxOf(prefs.getLong("last", now), now - 24 * 3600_000L)
         val today = LocalDate.now().toEpochDay()
 
-        // 마지막 실행 이후 도래한 알림 발송 (너무 오래된 것은 무시)
-        if (fire) for (e in list) for (day in today - 1..today) {
-            if (!e.occursOn(day) || e.isDone(day)) continue
+        // 직전 실행 때 이미 등록돼 있던 항목만 발송한다.
+        // 방금 새로 저장/수정한 항목의 이미 지난 시각은 울리지 않고, Doze 등으로 늦어진 알림은 놓치지 않는다.
+        val known = prefs.getStringSet("sig", null)
+        if (known != null) for (e in list) for (day in today - 1..today) {
+            if (sig(e) !in known || !e.occursOn(day) || e.isDone(day)) continue
             val t = at(e, day)
             if (t > last && t <= now && now - t < MAX_LATE) notify(ctx, e)
         }
-        prefs.edit().putLong("last", now).apply()
+        prefs.edit().putLong("last", now).putStringSet("sig", list.map(::sig).toSet()).apply()
 
         // 다음 알림 예약
         var next = Long.MAX_VALUE

@@ -49,6 +49,14 @@ interface EntryDao {
     @Query("SELECT * FROM Entry WHERE id = :id")
     suspend fun get(id: Long): Entry?
 
+    @Query("SELECT * FROM Entry ORDER BY id")
+    suspend fun all(): List<Entry>
+
+    @Query("DELETE FROM Entry")
+    suspend fun clear()
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE) suspend fun addAll(list: List<Entry>)
+
     @Insert suspend fun add(e: Entry)
     @Update suspend fun update(e: Entry)
     @Delete suspend fun delete(e: Entry)
@@ -154,5 +162,10 @@ suspend fun Db.setDone(id: Long, day: Long, v: Boolean) = withTransaction {
 }
 
 suspend fun Db.save(e: Entry) = withTransaction {
-    if (e.id == 0L) dao().add(e) else dao().update(e.copy(doneDates = dao().get(e.id)?.doneDates ?: e.doneDates))
+    if (e.id == 0L) dao().add(e) else {
+        val cur = dao().get(e.id)
+        // 날짜/반복을 바꾸면 이전 완료 표시는 의미가 없으므로 초기화
+        val keep = cur != null && cur.date == e.date && cur.repeat == e.repeat
+        dao().update(e.copy(doneDates = if (keep) cur!!.doneDates else ""))
+    }
 }

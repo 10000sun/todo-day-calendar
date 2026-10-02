@@ -1,6 +1,7 @@
 package com.todocalendar
 
 import android.content.Context
+import kotlinx.coroutines.CancellationException
 import java.time.LocalDate
 
 /** 알림창과 위젯이 같이 쓰는 "오늘 요약" */
@@ -24,6 +25,8 @@ data class Summary(
                     dao.onDay(day).filter { it.isEvent || !it.isDone(day) },
                     upcomingDates(dao.ddayList(), t)
                 )
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Exception) {
                 Summary(t, head, emptyList(), emptyList())
             }

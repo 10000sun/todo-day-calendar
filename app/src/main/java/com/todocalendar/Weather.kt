@@ -11,6 +11,8 @@ import android.os.Bundle
 import android.os.Looper
 import android.location.LocationListener
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
 import java.net.HttpURLConnection
@@ -23,13 +25,19 @@ import java.net.URL
 object Weather {
     private const val FRESH = 30 * 60_000L   // 이 시간 안의 캐시는 그대로 사용
     private const val RETRY = 5 * 60_000L    // 실패 후 재시도 간격
+    /** 동시 갱신이 겹쳐도 네트워크 조회는 한 번만 하고, 나머지는 그 결과(캐시)를 쓴다 */
+    private val lock = Mutex()
 
     private fun prefs(c: Context) = c.getSharedPreferences("weather", Context.MODE_PRIVATE)
 
     private fun save(c: Context, l: Location) {
-        // 위치가 갱신되면 기온도 다음 갱신 때 새로 받도록 캐시 시각을 지운다
-        prefs(c).edit().putString("lat", l.latitude.toString()).putString("lon", l.longitude.toString())
-            .remove("at").remove("tried").apply()
+        val p = prefs(c)
+        val lat = l.latitude.toString()
+        val lon = l.longitude.toString()
+        // 같은 좌표면 캐시/재시도 간격을 그대로 둔다 (앱을 열 때마다 네트워크 조회하지 않도록)
+        if (p.getString("lat", null) == lat && p.getString("lon", null) == lon) return
+        // 위치가 바뀌면 기온도 다음 갱신 때 새로 받도록 캐시 시각을 지운다
+        p.edit().putString("lat", lat).putString("lon", lon).remove("at").remove("tried").apply()
     }
 
     /** 앱이 화면에 있을 때 호출: 현재(마지막) 위치를 저장하고 끝나면 then 실행 */
@@ -64,14 +72,16 @@ object Weather {
      * "18°C" 형태. 저장된 위치가 없으면 IP 기반 대략적 위치로 대신 조회한다.
      * 네트워크 실패 시 이전 캐시, 그것도 없으면 null
      */
-    suspend fun tempText(ctx: Context): String? = withContext(Dispatchers.IO) {
+    suspend fun tempText(ctx: Context): String? = withContext(Dispatchers.IO) { lock.withLock { fetch(ctx) } }
+
+    private fun fetch(ctx: Context): String? {
         val p = prefs(ctx)
         val now = System.currentTimeMillis()
         val cached = if (p.contains("temp")) p.getFloat("temp", 0f) else null
-        if (cached != null && now - p.getLong("at", 0) < FRESH) return@withContext fmt(cached)
-        if (now - p.getLong("tried", 0) < RETRY) return@withContext cached?.let(::fmt)
+        if (cached != null && now - p.getLong("at", 0) < FRESH) return fmt(cached)
+        if (now - p.getLong("tried", 0) < RETRY) return cached?.let(::fmt)
         p.edit().putLong("tried", now).apply()
-        try {
+        return try {
             var lat = p.getString("lat", null)
             var lon = p.getString("lon", null)
             if (lat == null || lon == null) {

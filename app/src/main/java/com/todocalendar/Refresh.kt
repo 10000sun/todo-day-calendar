@@ -9,23 +9,29 @@ import androidx.core.app.NotificationCompat
 import androidx.glance.appwidget.updateAll
 import androidx.work.*
 import kotlinx.coroutines.*
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import java.time.LocalDate
 import java.util.concurrent.TimeUnit
 
 /** 위젯 + 잠금화면 알림을 한 번에 갱신 */
 object Refresh {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    /** 갱신이 겹치면 오래된 요약이 최신 알림을 덮어쓰거나 알림이 중복 발송되므로 한 번에 하나씩 */
+    private val lock = Mutex()
     fun fire(ctx: Context) { scope.launch { all(ctx) } }
 
     /** 화면(컴포지션)이 사라져도 취소되지 않도록 앱 범위에서 실행 */
     fun launch(block: suspend () -> Unit) { scope.launch { block() } }
 
-    /** fire=false: 사용자가 방금 직접 수정한 경우 — 이미 지난 알림 시각은 울리지 않고 건너뜀 */
-    suspend fun all(ctx: Context, fire: Boolean = true) {
+    /** userEdit=true: 사용자가 데이터를 바꾼 경우 — 끝나면 자동 백업 파일도 갱신 */
+    suspend fun all(ctx: Context, userEdit: Boolean = false) = lock.withLock {
+        // 알람 재예약을 가장 먼저: 아래 단계(기온 조회 등 네트워크)가 느려도 알람은 보장
+        step { Reminders.run(ctx) }
+        step { LockNotifier.post(ctx) }
         step { TodayWidget().updateAll(ctx) }
         step { MonthWidget().updateAll(ctx) }
-        step { Reminders.run(ctx, fire) }
-        step { LockNotifier.post(ctx) }
+        if (userEdit) step { Backup.autoWrite(ctx) }
     }
 
     /** 한 단계가 실패해도 나머지(특히 알람 재예약)는 계속 진행 */
@@ -112,7 +118,7 @@ class ToggleReceiver : BroadcastReceiver() {
         CoroutineScope(Dispatchers.Default).launch {
             try {
                 Db.get(c).setDone(id, day, true)
-                Refresh.all(c, fire = false)
+                Refresh.all(c, userEdit = true)
             } finally { p.finish() }
         }
     }

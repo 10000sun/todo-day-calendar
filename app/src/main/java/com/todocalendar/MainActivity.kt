@@ -3,9 +3,13 @@ package com.todocalendar
 import android.Manifest
 import android.app.DatePickerDialog
 import android.app.TimePickerDialog
+import android.content.Context
+import android.content.Intent
 import android.content.pm.PackageManager
+import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
@@ -22,6 +26,8 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.Saver
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -34,13 +40,57 @@ import java.time.DayOfWeek
 import java.time.LocalDate
 import java.time.YearMonth
 
+/** 파일 선택 시 읽기/쓰기 권한을 함께 받아 두어, 복원한 파일에 자동 백업을 계속 쓸 수 있게 한다 */
+private class OpenWritable : ActivityResultContracts.OpenDocument() {
+    override fun createIntent(context: Context, input: Array<String>): Intent =
+        super.createIntent(context, input).addFlags(
+            Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION or
+                Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION
+        )
+}
+
 class MainActivity : ComponentActivity() {
     private val askPerms = registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { refreshAll() }
+    private val pickBackup = registerForActivityResult(ActivityResultContracts.CreateDocument("application/json")) { uri ->
+        uri?.let { setBackupTarget(it, "백업 파일을 지정했습니다. 이제 데이터를 바꿀 때마다 자동으로 저장됩니다.") }
+    }
+    private val pickRestore = registerForActivityResult(OpenWritable()) { uri -> uri?.let { restoreFrom(it) } }
 
-    /** 알림/위젯 갱신 + 현재 위치 저장 후 한 번 더 갱신(기온 반영) */
+    /** 알림/위젯 갱신 + 현재 위치 저장 후 한 번 더 갱신(기온 반영). Activity를 붙들지 않도록 applicationContext 사용 */
     private fun refreshAll() {
-        Refresh.fire(this)
-        Weather.captureLocation(this) { Refresh.fire(this) }
+        val app = applicationContext
+        Refresh.fire(app)
+        Weather.captureLocation(app) { Refresh.fire(app) }
+    }
+
+    private fun toast(msg: String) = runOnUiThread { Toast.makeText(this, msg, Toast.LENGTH_LONG).show() }
+
+    private fun persist(uri: Uri) {
+        runCatching {
+            contentResolver.takePersistableUriPermission(
+                uri, Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+            )
+        }
+    }
+
+    private fun setBackupTarget(uri: Uri, okMsg: String) {
+        persist(uri)
+        val app = applicationContext
+        Refresh.launch {
+            if (Backup.write(app, uri)) { Backup.setTarget(app, uri); toast(okMsg) } else toast("백업 파일에 쓰지 못했습니다")
+        }
+    }
+
+    private fun restoreFrom(uri: Uri) {
+        persist(uri)
+        val app = applicationContext
+        Refresh.launch {
+            val n = Backup.restore(app, uri)
+            if (n == null) { toast("복원하지 못했습니다. 투두캘린더 백업 파일인지 확인해 주세요"); return@launch }
+            if (Backup.write(app, uri)) Backup.setTarget(app, uri)
+            Refresh.all(app)
+            toast("${n}개 항목을 복원했습니다")
+        }
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -52,7 +102,12 @@ class MainActivity : ComponentActivity() {
         if (need.isNotEmpty()) askPerms.launch(need.toTypedArray())
         setContent {
             MaterialTheme(colorScheme = if (isSystemInDarkTheme()) darkColorScheme() else lightColorScheme()) {
-                Surface(Modifier.fillMaxSize()) { CalendarScreen() }
+                Surface(Modifier.fillMaxSize()) {
+                    CalendarScreen(
+                        onPickBackup = { pickBackup.launch("todocalendar-backup.json") },
+                        onRestore = { pickRestore.launch(arrayOf("*/*")) }
+                    )
+                }
             }
         }
     }
@@ -63,15 +118,20 @@ class MainActivity : ComponentActivity() {
     }
 }
 
+private val dateSaver = Saver<LocalDate, Long>(save = { it.toEpochDay() }, restore = { LocalDate.ofEpochDay(it) })
+private val monthSaver = Saver<YearMonth, String>(save = { it.toString() }, restore = { YearMonth.parse(it) })
+
 @Composable
-fun CalendarScreen() {
+fun CalendarScreen(onPickBackup: () -> Unit, onRestore: () -> Unit) {
     val ctx = LocalContext.current
     val db = remember { Db.get(ctx) }
     val entryDao = remember { db.dao() }
     val today = LocalDate.now()
-    var month by remember { mutableStateOf(YearMonth.from(today)) }
-    var selected by remember { mutableStateOf(today) }
-    var adding by remember { mutableStateOf(false) }
+    // 화면 회전 등으로 Activity가 다시 만들어져도 보던 달/날짜/추가창이 유지되도록
+    var month by rememberSaveable(stateSaver = monthSaver) { mutableStateOf(YearMonth.from(today)) }
+    var selected by rememberSaveable(stateSaver = dateSaver) { mutableStateOf(today) }
+    var adding by rememberSaveable { mutableStateOf(false) }
+    var showBackup by rememberSaveable { mutableStateOf(false) }
     var editing by remember { mutableStateOf<Entry?>(null) }
     val entries by remember(month) { entryDao.visible(month.atDay(1).toEpochDay(), month.atEndOfMonth().toEpochDay()) }
         .collectAsState(emptyList())
@@ -83,15 +143,15 @@ fun CalendarScreen() {
 
     fun write(block: suspend Db.() -> Unit) {
         val app = ctx.applicationContext
-        Refresh.launch { db.block(); Refresh.all(app, fire = false) }
+        Refresh.launch { db.block(); Refresh.all(app, userEdit = true) }
     }
 
     Scaffold(
         floatingActionButton = { FloatingActionButton(onClick = { adding = true }) { Text("＋") } }
     ) { pad ->
         Column(Modifier.padding(pad).padding(horizontal = 12.dp)) {
-            if (soon.isNotEmpty()) {
-                LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                LazyRow(Modifier.weight(1f), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     items(soon, key = { it.id }) { e ->
                         AssistChip(
                             onClick = { selected = LocalDate.ofEpochDay(e.nextOn(today.toEpochDay()) ?: e.date); month = YearMonth.from(selected) },
@@ -99,6 +159,7 @@ fun CalendarScreen() {
                         )
                     }
                 }
+                TextButton({ showBackup = true }) { Text("백업") }
             }
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
                 TextButton({ month = month.minusMonths(1) }) { Text("<") }
@@ -148,6 +209,8 @@ fun CalendarScreen() {
         }
     }
 
+    if (showBackup) BackupDialog({ showBackup = false }, { showBackup = false; onPickBackup() }, { showBackup = false; onRestore() })
+
     if (adding || editing != null) {
         val close = { adding = false; editing = null }
         EntryDialog(editing, selected, close) { e -> write { save(e) }; close() }
@@ -183,6 +246,29 @@ private fun RowScope.DayCell(d: LocalDate?, sel: Boolean, isToday: Boolean, hasE
 
 @Composable
 private fun Dot(c: Color) = Box(Modifier.padding(1.dp).size(5.dp).background(c, CircleShape))
+
+@Composable
+private fun BackupDialog(onDismiss: () -> Unit, onPick: () -> Unit, onRestore: () -> Unit) {
+    val on = Backup.target(LocalContext.current) != null
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("백업 / 복원") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(
+                    if (on) "자동 백업 켜짐: 데이터를 바꿀 때마다 백업 파일에 저장됩니다."
+                    else "자동 백업 꺼짐: 백업 파일을 지정하면 데이터를 바꿀 때마다 자동 저장됩니다."
+                )
+                Text(
+                    "앱을 지우고 다시 설치했다면 '백업에서 복원'으로 저장해 둔 파일을 선택하세요. 현재 데이터는 백업 내용으로 교체됩니다.",
+                    style = MaterialTheme.typography.labelMedium
+                )
+            }
+        },
+        confirmButton = { TextButton(onPick) { Text(if (on) "백업 파일 변경" else "백업 파일 지정") } },
+        dismissButton = { TextButton(onRestore) { Text("백업에서 복원") } }
+    )
+}
 
 /** 선택된 쪽만 진하게 채워서 보이고, 선택 안 된 쪽은 테두리 없는 연한 배경 */
 @Composable

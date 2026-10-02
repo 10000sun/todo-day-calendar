@@ -13,7 +13,31 @@ android {
         minSdk = 26
         targetSdk = 35
         versionCode = 1
-        versionName = "0.1.0"
+        versionName = "1.0.0"
+    }
+    // 저장소에 포함된 고정 키로 서명: 어느 빌드(CI 포함)든 서명이 같아서, 앱을 지우지 않고 덮어 설치해도 데이터가 유지된다.
+    // 스토어 배포용 서명은 환경변수(RELEASE_KEYSTORE 등)로 따로 지정한다.
+    signingConfigs {
+        getByName("debug") {
+            storeFile = file("debug.keystore")
+            storePassword = "android"
+            keyAlias = "androiddebugkey"
+            keyPassword = "android"
+        }
+        System.getenv("RELEASE_KEYSTORE")?.let { path ->
+            create("release") {
+                storeFile = file(path)
+                storePassword = System.getenv("RELEASE_STORE_PASSWORD")
+                keyAlias = System.getenv("RELEASE_KEY_ALIAS")
+                keyPassword = System.getenv("RELEASE_KEY_PASSWORD")
+            }
+        }
+    }
+    buildTypes {
+        release {
+            isMinifyEnabled = false
+            signingConfig = signingConfigs.findByName("release") ?: signingConfigs.getByName("debug")
+        }
     }
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
