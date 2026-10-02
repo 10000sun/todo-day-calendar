@@ -52,6 +52,10 @@ interface EntryDao {
     @Query("SELECT * FROM Entry ORDER BY id")
     suspend fun all(): List<Entry>
 
+    /** 어떤 경로로든 데이터가 바뀌면 다시 내보낸다 (위젯 자동 갱신 감시용) */
+    @Query("SELECT * FROM Entry")
+    fun observeAll(): Flow<List<Entry>>
+
     @Query("DELETE FROM Entry")
     suspend fun clear()
 

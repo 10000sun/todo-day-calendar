@@ -8,6 +8,7 @@ import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.work.*
 import kotlinx.coroutines.*
+import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import java.time.LocalDate
@@ -19,6 +20,20 @@ object Refresh {
     /** 갱신이 겹치면 오래된 요약이 최신 알림을 덮어쓰거나 알림이 중복 발송되므로 한 번에 하나씩 */
     private val lock = Mutex()
     fun fire(ctx: Context) { scope.launch { all(ctx) } }
+
+    /**
+     * 데이터가 바뀌는 순간마다 위젯을 다시 그린다. 앱 화면/알림/위젯/복원 등 어떤 경로로 바뀌어도 위젯이 낡은 채로 남지 않도록
+     * 개별 호출에 의존하지 않고 DB 변경 자체를 감시한다. (연속 변경은 마지막 것만 반영)
+     */
+    fun watchData(ctx: Context) {
+        val app = ctx.applicationContext
+        scope.launch {
+            Db.get(app).dao().observeAll().collectLatest {
+                delay(100)
+                widgetLock.withLock { step { withTimeoutOrNull(WIDGET_TIMEOUT) { Widgets.updateAll(app) } } }
+            }
+        }
+    }
 
     /** 화면(컴포지션)이 사라져도 취소되지 않도록 앱 범위에서 실행 */
     fun launch(block: suspend () -> Unit) { scope.launch { block() } }
@@ -182,6 +197,7 @@ class TodoApp : Application() {
     override fun onCreate() {
         super.onCreate()
         Holidays.init(this)
+        Refresh.watchData(this)
         WorkManager.getInstance(this).enqueueUniquePeriodicWork(
             "refresh", ExistingPeriodicWorkPolicy.KEEP,
             PeriodicWorkRequestBuilder<RefreshWorker>(15, TimeUnit.MINUTES).build()
