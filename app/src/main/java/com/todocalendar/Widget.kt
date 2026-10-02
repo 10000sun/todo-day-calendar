@@ -163,7 +163,8 @@ class MonthWidget : GlanceAppWidget() {
         } catch (e: Exception) {
             // 데이터를 못 읽어도 달력 틀은 보여준다
         }
-        provideContent { MonthBody(ym, today, sel, eventDays, todoDays, items) }
+        val temp = Weather.cachedLabel(context)
+        provideContent { MonthBody(ym, today, sel, eventDays, todoDays, items, temp) }
     }
 }
 
@@ -171,7 +172,7 @@ private val EVENT_DOT = Color(0xFFFFB74D)
 private val TODO_DOT = Color(0xFF4FC3F7)
 
 @Composable
-private fun MonthBody(ym: YearMonth, today: LocalDate, sel: LocalDate, eventDays: Set<Int>, todoDays: Set<Int>, items: List<Entry>) {
+private fun MonthBody(ym: YearMonth, today: LocalDate, sel: LocalDate, eventDays: Set<Int>, todoDays: Set<Int>, items: List<Entry>, temp: String) {
     val white = ColorProvider(Color.White)
     val open = actionStartActivity(Intent(LocalContext.current, MainActivity::class.java))
     val selDay = sel.toEpochDay()
@@ -182,10 +183,13 @@ private fun MonthBody(ym: YearMonth, today: LocalDate, sel: LocalDate, eventDays
             .padding(8.dp)
             .clickable(open)
     ) {
-        Text(
-            "${ym.year}년 ${ym.monthValue}월", GlanceModifier.fillMaxWidth().padding(bottom = 2.dp),
-            style = TextStyle(color = white, fontSize = 15.sp, fontWeight = FontWeight.Bold)
-        )
+        Row(GlanceModifier.fillMaxWidth().padding(bottom = 2.dp), verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                "${ym.year}년 ${ym.monthValue}월", GlanceModifier.defaultWeight(),
+                style = TextStyle(color = white, fontSize = 15.sp, fontWeight = FontWeight.Bold)
+            )
+            Text(temp, style = TextStyle(color = white, fontSize = 13.sp))
+        }
         Row(GlanceModifier.fillMaxWidth()) {
             listOf("일", "월", "화", "수", "목", "금", "토").forEach {
                 Box(GlanceModifier.defaultWeight().height(18.dp), contentAlignment = Alignment.Center) {
