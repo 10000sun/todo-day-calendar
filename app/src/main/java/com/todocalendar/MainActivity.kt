@@ -47,6 +47,10 @@ class MainActivity : ComponentActivity() {
     /** 첫 연결 때 고정 위치에 이미 백업이 있고 현재 데이터도 있을 때, 복원/덮어쓰기를 묻기 위한 상태 (백업 항목 수) */
     private var pendingExisting by mutableStateOf<Int?>(null)
     private var showBackup by mutableStateOf(false)
+    /** 처음 실행(또는 이전 버전에서 업데이트 후 처음) 때 보여주는 사용법 팝업 */
+    private var showGuide by mutableStateOf(false)
+    /** '?' 버튼으로 다시 열어 본 사용법 */
+    private var showHelp by mutableStateOf(false)
 
     private val askPerms = registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) {
         refreshAll()
@@ -78,7 +82,7 @@ class MainActivity : ComponentActivity() {
     private fun syncBackup() {
         val app = applicationContext
         if (!Backup.hasAccess(app)) {
-            if (!Backup.prompted(app)) { Backup.setPrompted(app); showBackup = true }
+            if (!Backup.prompted(app) && !showGuide) { Backup.setPrompted(app); showBackup = true }
             return
         }
         if (Backup.resolved(app)) return
@@ -130,17 +134,35 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    override fun onCreate(savedInstanceState: Bundle?) {
-        super.onCreate(savedInstanceState)
+    private fun askRuntimePermissions() {
         val need = buildList {
             if (Build.VERSION.SDK_INT >= 33) add(Manifest.permission.POST_NOTIFICATIONS)
             add(Manifest.permission.ACCESS_COARSE_LOCATION)
         }.filter { checkSelfPermission(it) != PackageManager.PERMISSION_GRANTED }
-        if (need.isNotEmpty() && savedInstanceState == null) askPerms.launch(need.toTypedArray())
+        if (need.isNotEmpty()) askPerms.launch(need.toTypedArray())
+    }
+
+    private fun closeGuide() {
+        val first = showGuide
+        showGuide = false
+        showHelp = false
+        if (first) {
+            Guide.markSeen(applicationContext)
+            askRuntimePermissions()
+            syncBackup()   // 안내 때문에 미뤄 둔 백업 안내/연결을 이어서 진행
+        }
+    }
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        showGuide = !Guide.seen(applicationContext)
+        // 안내를 먼저 보여주고, 권한 요청은 안내를 닫은 뒤에 한다 (처음 실행 시 팝업이 겹치지 않도록)
+        if (savedInstanceState == null && !showGuide) askRuntimePermissions()
         setContent {
             MaterialTheme(colorScheme = if (isSystemInDarkTheme()) darkColorScheme() else lightColorScheme()) {
                 Surface(Modifier.fillMaxSize()) {
-                    CalendarScreen(onOpenBackup = { showBackup = true })
+                    CalendarScreen(onOpenBackup = { showBackup = true }, onOpenHelp = { showHelp = true })
+                    if (showGuide || showHelp) GuideDialog(onClose = { closeGuide() })
                     if (showBackup) BackupDialog(
                         onDismiss = { showBackup = false },
                         onSettings = { showBackup = false; openAccessSettings() },
@@ -193,7 +215,7 @@ private val dateSaver = Saver<LocalDate, Long>(save = { it.toEpochDay() }, resto
 private val monthSaver = Saver<YearMonth, String>(save = { it.toString() }, restore = { YearMonth.parse(it) })
 
 @Composable
-fun CalendarScreen(onOpenBackup: () -> Unit) {
+fun CalendarScreen(onOpenBackup: () -> Unit, onOpenHelp: () -> Unit) {
     val ctx = LocalContext.current
     val db = remember { Db.get(ctx) }
     val entryDao = remember { db.dao() }
@@ -229,6 +251,7 @@ fun CalendarScreen(onOpenBackup: () -> Unit) {
                         )
                     }
                 }
+                TextButton(onOpenHelp) { Text("?") }
                 TextButton(onOpenBackup) { Text("백업") }
             }
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
