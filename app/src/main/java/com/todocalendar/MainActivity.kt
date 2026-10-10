@@ -155,6 +155,7 @@ class MainActivity : ComponentActivity() {
         showHelp = false
         if (first) {
             Guide.markSeen(applicationContext)
+            Ads.start(this)
             // 권한 요청 창이 떠 있으면 그 결과 콜백에서 이어서 진행해 팝업이 겹치지 않게 한다
             if (!askRuntimePermissions()) syncBackup()   // 안내 때문에 미뤄 둔 백업 안내/연결을 이어서 진행
         }
@@ -210,6 +211,7 @@ class MainActivity : ComponentActivity() {
         super.onStart()
         refreshAll()
         syncBackup()   // 권한 설정 화면에서 돌아왔을 때도 여기서 이어진다
+        if (!showGuide) Ads.start(this)
     }
 }
 
@@ -246,6 +248,7 @@ fun CalendarScreen(onOpenBackup: () -> Unit, onOpenHelp: () -> Unit) {
     }
 
     Scaffold(
+        bottomBar = { AdSection() },   // 광고는 하단의 별도 구역에만 둔다 (본문과 분리)
         floatingActionButton = { FloatingActionButton(onClick = { adding = true }) { Text("＋") } }
     ) { pad ->
         Column(Modifier.padding(pad).padding(horizontal = 12.dp)) {

@@ -1,5 +1,6 @@
 name: release
-# v로 시작하는 태그(예: v1.0.0)를 push하면 APK를 GitHub Release에 첨부한다
+# v로 시작하는 태그(예: v1.0.0)를 push하면 Play 업로드용 AAB와 APK를 만든다.
+# 저장소 Secrets: KEYSTORE_BASE64, KEYSTORE_PASSWORD, KEY_ALIAS, KEY_PASSWORD (업로드 키), ADMOB_APP_ID, ADMOB_BANNER_ID
 on:
   push:
     tags: ["v*"]
@@ -14,11 +15,24 @@ jobs:
         with: { distribution: temurin, java-version: 17 }
       - uses: gradle/actions/setup-gradle@v4
         with: { gradle-version: "8.9" }
-      - name: Build release APK
+      - name: Build release (AAB + APK)
         env:
           TAG: ${{ github.ref_name }}
           VERSION_CODE: ${{ github.run_number }}
-        run: VERSION_NAME="${TAG#v}" gradle :app:assembleRelease --no-daemon
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+          RELEASE_STORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          RELEASE_KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          RELEASE_KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+          ADMOB_APP_ID: ${{ secrets.ADMOB_APP_ID }}
+          ADMOB_BANNER_ID: ${{ secrets.ADMOB_BANNER_ID }}
+        run: |
+          # 업로드 키가 없으면 Play가 거부하는 디버그 서명이 되므로 여기서 멈춘다
+          test -n "$KEYSTORE_BASE64" || { echo "KEYSTORE_BASE64 secret이 없습니다"; exit 1; }
+          echo "$KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/upload.jks"
+          export RELEASE_KEYSTORE="$RUNNER_TEMP/upload.jks"
+          VERSION_NAME="${TAG#v}" gradle :app:bundleRelease :app:assembleRelease --no-daemon
+      - uses: actions/upload-artifact@v4
+        with: { name: play-aab, path: app/build/outputs/bundle/release/app-release.aab }
       - name: Create release
         env:
           GH_TOKEN: ${{ github.token }}

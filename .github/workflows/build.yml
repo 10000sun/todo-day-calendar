@@ -9,10 +9,18 @@ jobs:
         with: { distribution: temurin, java-version: 17 }
       - uses: gradle/actions/setup-gradle@v4
         with: { gradle-version: "8.9" }
-      - run: gradle :app:assembleDebug :app:assembleRelease --no-daemon
+      - run: gradle :app:assembleDebug :app:assembleRelease :app:bundleRelease --no-daemon
+      # Play는 16KB 페이지 크기를 요구한다: 네이티브 라이브러리가 정렬돼 있는지 확인(참고용, 실패해도 빌드는 계속)
+      - name: 16KB page-size check
+        continue-on-error: true
+        run: |
+          unzip -l app/build/outputs/apk/release/app-release.apk | grep '\.so' || echo "no native libs"
+          ZA=$(ls $ANDROID_HOME/build-tools/*/zipalign | sort -V | tail -1)
+          "$ZA" -c -P 16 -v 4 app/build/outputs/apk/release/app-release.apk | tail -3
       - uses: actions/upload-artifact@v4
         with:
           name: apk
           path: |
             app/build/outputs/apk/debug/app-debug.apk
             app/build/outputs/apk/release/app-release.apk
+            app/build/outputs/bundle/release/app-release.aab
