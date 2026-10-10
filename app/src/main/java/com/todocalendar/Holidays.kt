@@ -16,7 +16,7 @@ import java.time.LocalDate
 /**
  * 대한민국 공휴일(대체공휴일·임시공휴일 포함). 날짜를 앱에 직접 넣지 않고
  * hyunbinseo/holidays-kr(MIT, 우주항공청 월력요항 기반)이 공개하는 연도별 JSON을 받아와 저장한다.
- * 일주일마다 자동 갱신하고, 인터넷이 없으면 저장된 데이터를 쓴다.
+ * 앱에 데이터가 포함돼 있고(assets), 인터넷으로 일주일마다 최신본을 받아 덮어쓴다. 인터넷이 없어도 항상 표시된다.
  */
 object Holidays {
     private const val PREF = "holidays"
@@ -55,6 +55,13 @@ object Holidays {
 
     private fun loadAll(ctx: Context): Map<String, String> {
         val all = HashMap<String, String>()
+        // 1) 앱에 포함된 데이터(assets/holidays, scripts/fetch-holidays.sh 로 갱신) — 인터넷이 없어도 항상 있는 기준
+        runCatching {
+            ctx.assets.list("holidays")?.forEach { name ->
+                parse(ctx.assets.open("holidays/$name").bufferedReader().use { it.readText() })?.let(all::putAll)
+            }
+        }
+        // 2) 인터넷으로 받아 둔 최신 데이터가 있으면 덮어쓴다 (임시공휴일 등 앱 배포 이후의 변경 반영)
         prefs(ctx).all.forEach { (k, v) -> if (k.startsWith("y") && v is String) parse(v)?.let(all::putAll) }
         return all
     }
