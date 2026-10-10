@@ -57,6 +57,7 @@ fun GuideDialog(onClose: () -> Unit) {
                     }
                 }
                 Text("이 안내는 화면 위쪽의 ? 버튼으로 언제든 다시 볼 수 있습니다.", style = MaterialTheme.typography.labelMedium)
+                Text("날씨 데이터: MET Norway (CC BY 4.0)", style = MaterialTheme.typography.labelSmall)
             }
         },
         confirmButton = { TextButton(onClose) { Text("시작하기") } }

@@ -9,6 +9,7 @@ import android.location.LocationManager
 import android.os.Build
 import android.os.Bundle
 import android.os.Looper
+import java.util.Locale
 import android.location.LocationListener
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.sync.Mutex
@@ -72,8 +73,7 @@ object Weather {
         ctx.checkSelfPermission(Manifest.permission.ACCESS_COARSE_LOCATION) == PackageManager.PERMISSION_GRANTED
 
     /**
-     * "18°C" 형태. 저장된 위치가 없으면 IP 기반 대략적 위치로 대신 조회한다.
-     * 네트워크 실패 시 이전 캐시, 그것도 없으면 null
+     * "18°C" 형태 (MET Norway, 상업 이용 가능·출처 표기 필요). 네트워크 실패 시 이전 캐시, 그것도 없으면 null
      */
     private suspend fun tempText(ctx: Context): String? = withContext(Dispatchers.IO) { lock.withLock { fetch(ctx) } }
 
@@ -91,22 +91,15 @@ object Weather {
         val cached = if (p.contains("temp")) p.getFloat("temp", 0f) else null
         if (cached != null && now - p.getLong("at", 0) < FRESH) return fmt(cached)
         if (now - p.getLong("tried", 0) < RETRY) return cached?.let(::fmt)
+        // 저장된 위치가 없으면 조회하지 않는다 (IP 기반 추정은 제3자에게 IP를 보내야 해서 쓰지 않음)
+        val lat = p.getString("lat", null)?.toDoubleOrNull() ?: return cached?.let(::fmt)
+        val lon = p.getString("lon", null)?.toDoubleOrNull() ?: return cached?.let(::fmt)
         p.edit().putLong("tried", now).apply()
         return try {
-            var lat = p.getString("lat", null)
-            var lon = p.getString("lon", null)
-            if (lat == null || lon == null) {
-                lat = p.getString("iplat", null)
-                lon = p.getString("iplon", null)
-                if (lat == null || lon == null) {
-                    val j = getJson("https://ipwho.is/")
-                    lat = j.getDouble("latitude").toString()
-                    lon = j.getDouble("longitude").toString()
-                    p.edit().putString("iplat", lat).putString("iplon", lon).apply()
-                }
-            }
-            val t = getJson("https://api.open-meteo.com/v1/forecast?latitude=$lat&longitude=$lon&current=temperature_2m")
-                .getJSONObject("current").getDouble("temperature_2m").toFloat()
+            // MET Norway 약관: 좌표는 소수 4자리까지, 앱을 식별하는 User-Agent 필수, 같은 요청을 자주 보내지 말 것(30분 캐시)
+            val url = "https://api.met.no/weatherapi/locationforecast/2.0/compact?lat=%.4f&lon=%.4f".format(Locale.US, lat, lon)
+            val t = getJson(url).getJSONObject("properties").getJSONArray("timeseries").getJSONObject(0)
+                .getJSONObject("data").getJSONObject("instant").getJSONObject("details").getDouble("air_temperature").toFloat()
             p.edit().putFloat("temp", t).putLong("at", now).apply()
             fmt(t)
         } catch (e: Exception) {
@@ -118,6 +111,7 @@ object Weather {
         val conn = URL(url).openConnection() as HttpURLConnection
         conn.connectTimeout = 5000
         conn.readTimeout = 5000
+        conn.setRequestProperty("User-Agent", "TodoDayCalendar/1.0 github.com/10000sun/todo-day-calendar")
         try { return JSONObject(conn.inputStream.bufferedReader().readText()) } finally { conn.disconnect() }
     }
 
@@ -127,6 +121,7 @@ object Weather {
         return when {
             p.contains("temp") -> fmt(p.getFloat("temp", 0f))
             p.getLong("tried", 0) > 0 -> "기온 확인 불가"
+            !p.contains("lat") && !hasLocationPermission(ctx) -> "위치 권한 필요"
             else -> "기온 확인 중"
         }
     }
