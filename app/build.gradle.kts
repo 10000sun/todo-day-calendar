@@ -63,4 +63,6 @@ dependencies {
     implementation("androidx.work:work-runtime-ktx:2.9.1")
     implementation("com.google.android.gms:play-services-ads:24.4.0")
     implementation("com.google.android.ump:user-messaging-platform:3.2.0")
+    // 광고 SDK가 끌고 오는 구버전 fragment 때문에 릴리스 린트(registerForActivityResult)가 실패하므로 올려서 고정
+    implementation("androidx.fragment:fragment:1.8.5")
 }
