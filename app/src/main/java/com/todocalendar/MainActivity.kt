@@ -7,7 +7,6 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
-import android.provider.Settings
 import android.os.Build
 import android.os.Bundle
 import android.os.Handler
@@ -44,20 +43,15 @@ import java.time.LocalDate
 import java.time.YearMonth
 
 class MainActivity : ComponentActivity() {
-    /** 첫 연결 때 고정 위치에 이미 백업이 있고 현재 데이터도 있을 때, 복원/덮어쓰기를 묻기 위한 상태 (백업 항목 수) */
-    private var pendingExisting by mutableStateOf<Int?>(null)
     private var showBackup by mutableStateOf(false)
     /** 처음 실행(또는 이전 버전에서 업데이트 후 처음) 때 보여주는 사용법 팝업 */
     private var showGuide by mutableStateOf(false)
     /** '?' 버튼으로 다시 열어 본 사용법 */
     private var showHelp by mutableStateOf(false)
-    private val syncing = java.util.concurrent.atomic.AtomicBoolean(false)
 
-    private val askPerms = registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) {
-        refreshAll()
-        syncBackup()
-    }
+    private val askPerms = registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { refreshAll() }
     private val pickRestore = registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri -> uri?.let { restoreFrom(it) } }
+    private val pickExport = registerForActivityResult(ActivityResultContracts.CreateDocument("application/json")) { uri -> uri?.let { exportTo(it) } }
 
     /** 알림/위젯 갱신 + 현재 위치 저장 후 한 번 더 갱신(기온 반영). Activity를 붙들지 않도록 applicationContext 사용 */
     private fun refreshAll() {
@@ -66,87 +60,28 @@ class MainActivity : ComponentActivity() {
         Weather.captureLocation(app) { Refresh.fire(app) }
     }
 
-
-    /** 자동 백업에 필요한 권한 설정 열기 (Android 11+: 모든 파일 접근 화면, 10 이하: 저장소 권한 요청) */
-    private fun openAccessSettings() {
-        if (Build.VERSION.SDK_INT >= 30) {
-            runCatching {
-                startActivity(Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION, Uri.parse("package:$packageName")))
-            }.onFailure { runCatching { startActivity(Intent(Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION)) } }
-        } else askPerms.launch(arrayOf(Manifest.permission.WRITE_EXTERNAL_STORAGE))
-    }
-
-    /**
-     * 자동 백업 연결. 권한이 없으면 안내를 한 번 띄우고, 있으면 고정 위치의 기존 백업을 확인한다:
-     * 백업 없음 -> 바로 백업 시작 / 현재 데이터 없음 -> 자동 복원 / 둘 다 있음 -> 사용자에게 선택 요청
-     */
-    private fun syncBackup() {
+    private fun exportTo(uri: Uri) {
         val app = applicationContext
-        if (!Backup.hasAccess(app)) {
-            if (!Backup.prompted(app) && !showGuide) { Backup.setPrompted(app); showBackup = true }
-            return
-        }
-        if (Backup.resolved(app)) return
-        // onStart / 권한 결과 콜백이 겹쳐 호출돼도 확인은 한 번에 하나만 (복원·토스트·팝업이 중복되지 않도록)
-        if (!syncing.compareAndSet(false, true)) return
-        Refresh.launch {
-            try {
-                val n = Backup.peek()
-                val count = Db.get(app).dao().all().size
-                when {
-                    n == Backup.NOT_BACKUP -> { pendingExisting = Backup.NOT_BACKUP }   // 읽을 수 없는 파일: 덮어쓸지 사용자에게 묻는다
-                    n == null || n == 0 -> { Backup.setResolved(app); Backup.write(app) }
-                    count == 0 -> restoreAuto()
-                    else -> { pendingExisting = n }
-                }
-            } finally { syncing.set(false) }
-        }
+        Refresh.launch { toastApp(app, if (Backup.export(app, uri)) "백업 파일을 저장했습니다" else "백업 파일에 쓰지 못했습니다") }
     }
 
-    private fun restoreAuto() {
-        val app = applicationContext
-        Refresh.launch {
-            val n = Backup.restoreFile(app)
-            if (n == null) { toastApp(app, "백업을 복원하지 못했습니다"); return@launch }
-            Backup.setResolved(app)
-            Refresh.all(app)
-            toastApp(app, "${n}개 항목을 복원했습니다")
-        }
-    }
-
-    private fun overwriteBackup() {
-        val app = applicationContext
-        Refresh.launch {
-            Backup.setResolved(app)
-            toastApp(app, if (Backup.write(app)) "현재 데이터로 자동 백업을 시작했습니다" else "백업 파일에 쓰지 못했습니다")
-        }
-    }
-
-    /** 사용자가 고른 다른 파일에서 복원 (복원 후 고정 위치 백업도 갱신) */
+    /** 사용자가 고른 파일에서 복원 */
     private fun restoreFrom(uri: Uri) {
         val app = applicationContext
         Refresh.launch {
             val n = Backup.restore(app, uri)
             if (n == null) { toastApp(app, "복원하지 못했습니다. 투두데이 캘린더 백업 파일인지 확인해 주세요"); return@launch }
-            // 권한이 없으면 고정 위치의 기존 백업을 아직 확인하지 못한 것이므로 '정리 완료'로 표시하지 않는다
-            // (표시하면 나중에 권한을 허용해도 기존 백업을 묻지 않고 덮어쓰게 된다)
-            if (Backup.hasAccess(app)) {
-                Backup.setResolved(app)
-                Backup.autoWrite(app)
-            }
             Refresh.all(app)
             toastApp(app, "${n}개 항목을 복원했습니다")
         }
     }
 
-    /** 요청 창을 실제로 띄웠으면 true (결과 콜백이 이어서 백업 연결을 진행한다) */
-    private fun askRuntimePermissions(): Boolean {
+    private fun askRuntimePermissions() {
         val need = buildList {
             if (Build.VERSION.SDK_INT >= 33) add(Manifest.permission.POST_NOTIFICATIONS)
             add(Manifest.permission.ACCESS_COARSE_LOCATION)
         }.filter { checkSelfPermission(it) != PackageManager.PERMISSION_GRANTED }
         if (need.isNotEmpty()) askPerms.launch(need.toTypedArray())
-        return need.isNotEmpty()
     }
 
     private fun closeGuide() {
@@ -156,8 +91,7 @@ class MainActivity : ComponentActivity() {
         if (first) {
             Guide.markSeen(applicationContext)
             Ads.start(this)
-            // 권한 요청 창이 떠 있으면 그 결과 콜백에서 이어서 진행해 팝업이 겹치지 않게 한다
-            if (!askRuntimePermissions()) syncBackup()   // 안내 때문에 미뤄 둔 백업 안내/연결을 이어서 진행
+            askRuntimePermissions()
         }
     }
 
@@ -173,35 +107,9 @@ class MainActivity : ComponentActivity() {
                     if (showGuide || showHelp) GuideDialog(onClose = { closeGuide() })
                     if (showBackup) BackupDialog(
                         onDismiss = { showBackup = false },
-                        onSettings = { showBackup = false; openAccessSettings() },
+                        onExport = { showBackup = false; pickExport.launch("todo-day-calendar-backup.json") },
                         onRestore = { showBackup = false; pickRestore.launch(arrayOf("*/*")) }
                     )
-                    pendingExisting?.let { n ->
-                        val unreadable = n < 0
-                        AlertDialog(
-                            onDismissRequest = { pendingExisting = null },
-                            title = { Text(if (unreadable) "백업 파일을 읽을 수 없습니다" else "이전에 저장된 백업이 있습니다") },
-                            text = {
-                                Text(
-                                    if (unreadable)
-                                        "${Backup.PATH_TEXT}의 내용이 손상됐거나 투두데이 캘린더 백업이 아닙니다.\n\n" +
-                                            "덮어쓰면 현재 데이터로 새 백업을 시작합니다. 나중에 정하려면 '나중에'를 누르세요."
-                                    else
-                                        "${Backup.PATH_TEXT}에 ${n}개 항목이 저장돼 있습니다.\n\n" +
-                                            "• 복원: 현재 데이터를 이 백업으로 교체합니다.\n" +
-                                            "• 덮어쓰기: 현재 데이터로 기존 백업을 지웁니다."
-                                )
-                            },
-                            confirmButton = {
-                                if (unreadable) TextButton({ pendingExisting = null; overwriteBackup() }) { Text("덮어쓰기") }
-                                else TextButton({ pendingExisting = null; restoreAuto() }) { Text("복원") }
-                            },
-                            dismissButton = {
-                                if (unreadable) TextButton({ pendingExisting = null }) { Text("나중에") }
-                                else TextButton({ pendingExisting = null; overwriteBackup() }) { Text("덮어쓰기") }
-                            }
-                        )
-                    }
                 }
             }
         }
@@ -210,7 +118,6 @@ class MainActivity : ComponentActivity() {
     override fun onStart() {
         super.onStart()
         refreshAll()
-        syncBackup()   // 권한 설정 화면에서 돌아왔을 때도 여기서 이어진다
         if (!showGuide) Ads.start(this)
     }
 }
@@ -244,7 +151,7 @@ fun CalendarScreen(onOpenBackup: () -> Unit, onOpenHelp: () -> Unit) {
 
     fun write(block: suspend Db.() -> Unit) {
         val app = ctx.applicationContext
-        Refresh.launch { db.block(); Refresh.all(app, userEdit = true) }
+        Refresh.launch { db.block(); Refresh.all(app) }
     }
 
     Scaffold(
@@ -352,31 +259,21 @@ private fun RowScope.DayCell(d: LocalDate?, sel: Boolean, isToday: Boolean, hasE
 private fun Dot(c: Color) = Box(Modifier.padding(1.dp).size(5.dp).background(c, CircleShape))
 
 @Composable
-private fun BackupDialog(onDismiss: () -> Unit, onSettings: () -> Unit, onRestore: () -> Unit) {
-    val ctx = LocalContext.current
-    val access = Backup.hasAccess(ctx)
-    val on = Backup.isActive(ctx)
+private fun BackupDialog(onDismiss: () -> Unit, onExport: () -> Unit, onRestore: () -> Unit) {
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("자동 백업") },
+        title = { Text("백업 / 복원") },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("자동 백업: 플레이스토어로 설치하고 구글 계정 백업이 켜져 있으면, 앱을 지웠다 다시 설치할 때 자동으로 복원됩니다. (설정 > Google > 백업)")
                 Text(
-                    when {
-                        on -> "자동 백업 켜짐: 데이터를 바꿀 때마다 아래 위치에 저장됩니다."
-                        access -> "자동 백업이 아직 시작되지 않았거나 마지막 저장에 실패했습니다. 앱을 다시 열어 보세요."
-                        else -> "자동 백업 꺼짐: '모든 파일 접근'을 허용하면 앱이 알아서 아래 위치에 저장합니다. 폴더를 직접 고를 필요가 없습니다."
-                    }
-                )
-                Text(Backup.PATH_TEXT, style = MaterialTheme.typography.labelMedium)
-                Text(
-                    "앱을 지우고 다시 설치해도 이 파일은 남습니다. 재설치 후 '모든 파일 접근'을 다시 허용하면 자동으로 복원됩니다.",
+                    "직접 보관하려면 파일로 내보내 두세요. 클라우드나 다른 폰으로 옮길 수도 있습니다. 가져오면 현재 데이터는 파일 내용으로 교체됩니다.",
                     style = MaterialTheme.typography.labelMedium
                 )
             }
         },
-        confirmButton = { if (access) TextButton(onDismiss) { Text("닫기") } else TextButton(onSettings) { Text("권한 설정 열기") } },
-        dismissButton = { TextButton(onRestore) { Text("다른 파일에서 복원") } }
+        confirmButton = { TextButton(onExport) { Text("파일로 내보내기") } },
+        dismissButton = { TextButton(onRestore) { Text("파일에서 가져오기") } }
     )
 }
 
