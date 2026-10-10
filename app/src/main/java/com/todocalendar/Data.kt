@@ -90,7 +90,9 @@ abstract class Db : RoomDatabase() {
 
         @Volatile private var inst: Db? = null
         fun get(c: Context): Db = inst ?: synchronized(this) {
-            inst ?: Room.databaseBuilder(c.applicationContext, Db::class.java, "cal.db").addMigrations(MIGRATION_1_2).build().also { inst = it }
+            inst ?: Room.databaseBuilder(c.applicationContext, Db::class.java, "cal.db").addMigrations(MIGRATION_1_2)
+                // WAL 파일 없이 DB 하나로 유지: 안드로이드 자동 백업이 최신 데이터를 빠짐없이 담도록
+                .setJournalMode(RoomDatabase.JournalMode.TRUNCATE).build().also { inst = it }
         }
     }
 }

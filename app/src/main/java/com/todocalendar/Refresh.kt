@@ -52,17 +52,15 @@ object Refresh {
     }
 
     /**
-     * userEdit=true: 사용자가 데이터를 바꾼 경우 — 끝나면 자동 백업 파일도 갱신.
      * 알림/알람/백업과 위젯 갱신은 서로 기다리지 않고 동시에 진행한다 (한쪽이 느려도 다른 쪽이 막히지 않음).
      * awaitNetwork=true: 기온/공휴일 조회가 끝날 때까지 기다린다 (백그라운드 워커처럼 끝난 뒤 프로세스가 멈출 수 있는 곳에서 사용)
      */
-    suspend fun all(ctx: Context, userEdit: Boolean = false, awaitNetwork: Boolean = false) {
+    suspend fun all(ctx: Context, awaitNetwork: Boolean = false) {
         coroutineScope {
             launch {
                 lock.withLock {
                     step { Reminders.run(ctx) }
                     step { LockNotifier.post(ctx) }
-                    if (userEdit) step { Backup.autoWrite(ctx) }
                 }
             }
             launch { updateWidgets(ctx) }
@@ -178,7 +176,7 @@ class ToggleReceiver : BroadcastReceiver() {
         CoroutineScope(Dispatchers.Default).launch {
             try {
                 Db.get(c).setDone(id, day, i.getBooleanExtra("done", true))
-                Refresh.all(c, userEdit = true)
+                Refresh.all(c)
             } finally { p.finish() }
         }
     }

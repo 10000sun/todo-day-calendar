@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 같은 규칙 (Android 11 이하) -->
+<full-backup-content>
+    <include domain="database" path="cal.db" />
+    <include domain="sharedpref" path="guide.xml" />
+</full-backup-content>
